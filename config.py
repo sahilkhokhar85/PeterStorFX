@@ -24,7 +24,7 @@ PORT = environ.get("PORT", "8080")
 
 # Database Information
 DB_URI = environ.get("DB_URI", "")  # set this in your host's environment variables
-DB_NAME = environ.get("DB_NAME", "Mrn_Officialx_imam_1503")
+DB_NAME = environ.get("DB_NAME", "")
 
 # Auto Delete Information
 AUTO_DELETE_MODE = is_enabled(environ.get('AUTO_DELETE_MODE', "True"), True) # Set True or False
@@ -49,7 +49,7 @@ VERIFY_MODE = is_enabled(environ.get('VERIFY_MODE', "False"), False) # Set True 
 # If Verify Mode Is True Then Fill All Required Variable, If False Then Don't Fill.
 SHORTLINK_URL = environ.get("SHORTLINK_URL", "linkshortify.com") # shortlink domain without https://
 SHORTLINK_API = environ.get("SHORTLINK_API", "933f3923527586776d9c6c6c6eebd1a30563bee6") # shortlink api (set in environment variables)
-VERIFY_TUTORIAL = environ.get("VERIFY_TUTORIAL", "https://t.me/MRN_Tutorial/1806") # how to open link 
+VERIFY_TUTORIAL = environ.get("VERIFY_TUTORIAL", "https://t.me/ChillFlizDemo/34") # how to open link 
 
 # Website Info:
 WEBSITE_URL_MODE = is_enabled(environ.get('WEBSITE_URL_MODE', "True"), True) # Set True or False
