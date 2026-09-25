@@ -7,10 +7,10 @@ class script(object):
 
 ɪ ᴄᴀɴ ꜱᴛᴏʀᴇ ꜰɪʟᴇꜱ ꜱᴀꜰᴇʟʏ, ᴀɴᴅ ᴜꜱᴇʀꜱ ᴄᴀɴ ᴀᴄᴄᴇꜱꜱ ᴛʜᴇᴍ ᴛʜʀᴏᴜɢʜ ᴛʜᴇ ᴘʀᴏᴠɪᴅᴇᴅ ꜱʜᴀʀᴇ ʟɪɴᴋ.
 
-👨‍💻 ᴘᴏᴡᴇʀᴇᴅ ʙʏ: @Mrn_Officialx
+👨‍💻 ᴘᴏᴡᴇʀᴇᴅ ʙʏ: @ChillFlizX
 
 ✅ ᴀɴʏ ʀᴇǫᴜᴇꜱᴛ / ǫᴜᴇʀʏ / ꜰᴇᴇᴅʙᴀᴄᴋ / ᴘᴀɪᴅ / ᴅᴇᴍᴏ
-🧑‍🔧 ᴄᴏɴᴛᴀᴄᴛ >>> @Mimam_Officialx</b>"""
+🧑‍🔧 ᴄᴏɴᴛᴀᴄᴛ >>> @RudraBlaze</b>"""
 
 
     
@@ -38,7 +38,7 @@ If You Want To Remove Api Then Copy This And Send To Bot - `/api None`"""
 
 📚 ʟɪʙʀᴀʀʏ: <a href=https://docs.pyrogram.org>𝐏𝐲𝐫𝐨𝐠𝐫𝐚𝐦</a>
 
-🇮🇳 ᴅᴇᴠᴇʟᴏᴘᴇʀ: <a href=https://t.me/mimam_officialx>꧁𓊈𒆜𝖒𝖎𝖒𝖆𝖒_𝖔𝖋𝖋𝖎𝖈𝖎𝖆𝖑𒆜𓊉꧂</a>
+🇮🇳 ᴅᴇᴠᴇʟᴏᴘᴇʀ: <a href=https://t.me/RudraBlaze>DEVIL</a>
 
 👥 sᴜᴘᴘᴏʀᴛ ɢʀᴏᴜᴘ: <a href=https://t.me/+LwFYMVKvg3FhODdl>𝖒𝖗𝖓 𝖙𝖛 𝖇𝖆𝖈𝖐-𝖚𝖕</a>
 
