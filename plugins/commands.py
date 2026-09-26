@@ -44,20 +44,25 @@ def formate_file_name(file_name):
 
 
 def stream_download_buttons(chat_id, message_id, media):
-    """Fast Download / Watch Online buttons only for supported file types."""
+    """Fast Download / Watch Online buttons only for documents, videos and audio."""
     if not STREAM_MODE:
         return []
 
     try:
-        # Stream buttons only for actual downloadable/streamable files
-        if not hasattr(media, "file_name") or not media.file_name:
+        # ONLY these media types should get Stream/Download buttons.
+        # Stickers, photos, animations, voice, video notes, etc. are excluded.
+        if not isinstance(media, (Document, Video, Audio)):
+            return []
+
+        file_name = getattr(media, "file_name", None)
+        if not file_name:
             return []
 
         download_url, watch_url = build_stream_urls(
             chat_id,
             message_id,
             getattr(media, "file_unique_id", ""),
-            media.file_name,
+            file_name,
         )
 
         return [[
