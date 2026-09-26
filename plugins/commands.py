@@ -44,14 +44,15 @@ def formate_file_name(file_name):
 
 
 def stream_download_buttons(chat_id, message_id, media):
-    """Fast Download / Watch Online buttons only for documents, videos and audio."""
+    """Fast Download / Watch Online buttons only for supported file types."""
     if not STREAM_MODE:
         return []
 
     try:
-        # ONLY these media types should get Stream/Download buttons.
-        # Stickers, photos, animations, voice, video notes, etc. are excluded.
-        if not isinstance(media, (Document, Video, Audio)):
+        # Sticker/photo/animation/voice/video_note etc. -> NO stream buttons
+        media_type = type(media).__name__.lower()
+
+        if media_type not in ("document", "video", "audio"):
             return []
 
         file_name = getattr(media, "file_name", None)
@@ -82,7 +83,7 @@ def stream_download_buttons(chat_id, message_id, media):
             exc_info=True
         )
         return []
-
+        
 
 async def _forward_accessed_to_log(client, refs):
     """Forward the actual files/videos a user just accessed (batch) into
@@ -416,7 +417,7 @@ async def start(client, message):
         return
     try:
         msg = await client.get_messages(LOG_CHANNEL, int(decode_file_id))
-        real_file_types = ("document", "video", "audio", "photo", "animation", "voice", "video_note")
+        real_file_types = ("document", "video", "audio", "photo", "animation", "voice", "video_note", "sticker")
         if msg.media and msg.media.value in real_file_types:
             media = getattr(msg, msg.media.value)
             orig_caption = getattr(msg, 'caption', None)
