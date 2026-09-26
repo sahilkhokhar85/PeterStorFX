@@ -367,58 +367,120 @@ async def start(client, message):
             info = fetched.get((channel_id, msgid))
             if not info:
                 continue
-            if info.media:
-                file_type = info.media
-                file = getattr(info, file_type.value)
-                f_caption = getattr(info, 'caption', '')
-                if f_caption:
-                    f_caption = f_caption.html
-                old_title = getattr(file, "file_name", "")
-                title = formate_file_name(old_title)
-                size=get_size(int(file.file_size))
-                batch_caption = settings.get("custom_caption") or BATCH_FILE_CAPTION
-                if batch_caption:
-                    try:
-                        f_caption=batch_caption.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
-                    except:
-                        f_caption=f_caption
-                if f_caption is None:
-                    f_caption = f"{title}"
+                        if info.sticker:
+                            try:
+                                msg = await info.copy(
+                                    chat_id=message.from_user.id,
+                                    protect_content=settings.get("protect_content", False)
+                                )
+                                title = "Sticker"
+                                    filesarr.append(msg)
+                                    titles.append(title)
+                                    accessed_refs.append((channel_id, msgid))
+                        except FloodWait as e:
+                            await asyncio.sleep(e.value)
+                            msg = await info.copy(
+                                chat_id=message.from_user.id,
+                                protect_content=settings.get("protect_content", False)
+                            )
+                            title = "Sticker"
+                                filesarr.append(msg)
+                                titles.append(title)
+                                accessed_refs.append((channel_id, msgid))
 
-                button = []
-                
-                for row in (settings.get("custom_buttons") or []):
-                    button.append([InlineKeyboardButton(b["text"], url=b["url"]) for b in row])
-                button.extend(stream_download_buttons(channel_id, msgid, file))
-                reply_markup = InlineKeyboardMarkup(button)
-                protect = settings.get("protect_content", False)
-                try:
-                    msg = await info.copy(chat_id=message.from_user.id, caption=f_caption, protect_content=protect, reply_markup=reply_markup)
-                except FloodWait as e:
-                    await asyncio.sleep(e.value)
-                    msg = await info.copy(chat_id=message.from_user.id, caption=f_caption, protect_content=protect, reply_markup=reply_markup)
-                except:
-                    continue
-            else:
-                title = "Unknown File"
-                protect = settings.get("protect_content", False)
+                        await asyncio.sleep(0.6)
+                        continue
 
-                button = []
-                
-                for row in (settings.get("custom_buttons") or []):
-                    button.append([InlineKeyboardButton(b["text"], url=b["url"]) for b in row])
-                reply_markup = InlineKeyboardMarkup(button)
-                try:
-                    msg = await info.copy(chat_id=message.from_user.id, protect_content=protect, reply_markup=reply_markup)
-                except FloodWait as e:
-                    await asyncio.sleep(e.value)
-                    msg = await info.copy(chat_id=message.from_user.id, protect_content=protect, reply_markup=reply_markup)
-                except:
-                    continue
-            filesarr.append(msg)
-            titles.append(title)
-            accessed_refs.append((channel_id, msgid))
-            await asyncio.sleep(0.6)
+                    if info.media:
+                        file_type = info.media
+                        file = getattr(info, file_type.value)
+                        f_caption = getattr(info, 'caption', '')
+                        if f_caption:
+                            f_caption = f_caption.html
+
+                        old_title = getattr(file, "file_name", "")
+                        title = formate_file_name(old_title)
+                        size = get_size(int(file.file_size))
+
+                        batch_caption = settings.get("custom_caption") or BATCH_FILE_CAPTION
+
+                        if batch_caption:
+                            try:
+                                f_caption = batch_caption.format(
+                                    file_name='' if title is None else title,
+                                    file_size='' if size is None else size,
+                                    file_caption='' if f_caption is None else f_caption
+                                )
+                            except:
+                                pass
+
+                        if f_caption is None:
+                            f_caption = f"{title}"
+
+                        button = []
+
+                        for row in (settings.get("custom_buttons") or []):
+                            button.append([
+                                InlineKeyboardButton(b["text"], url=b["url"])
+                                for b in row
+                            ])
+
+                                button.extend(stream_download_buttons(channel_id, msgid, file))
+                            reply_markup = InlineKeyboardMarkup(button)
+                            protect = settings.get("protect_content", False)
+
+                            try:
+                                msg = await info.copy(
+                                    chat_id=message.from_user.id,
+                                    caption=f_caption,
+                                    protect_content=protect,
+                                    reply_markup=reply_markup
+                                )
+                            except FloodWait as e:
+                                await asyncio.sleep(e.value)
+                                msg = await info.copy(
+                                    chat_id=message.from_user.id,
+                                    caption=f_caption,
+                                    protect_content=protect,
+                                    reply_markup=reply_markup
+                                )
+                            except:
+                                continue
+
+                        else:
+                            title = "Unknown File"
+                            protect = settings.get("protect_content", False)
+
+                            button = []
+
+                            for row in (settings.get("custom_buttons") or []):
+                                button.append([
+                                    InlineKeyboardButton(b["text"], url=b["url"])
+                                    for b in row
+                                ])
+
+                            reply_markup = InlineKeyboardMarkup(button)
+
+                            try:
+                                msg = await info.copy(
+                                    chat_id=message.from_user.id,
+                                    protect_content=protect,
+                                    reply_markup=reply_markup
+                                )
+                            except FloodWait as e:
+                                await asyncio.sleep(e.value)
+                                msg = await info.copy(
+                                    chat_id=message.from_user.id,
+                                    protect_content=protect,
+                                    reply_markup=reply_markup
+                                )
+                            except:
+                                continue
+
+                        filesarr.append(msg)
+                        titles.append(title)
+                            accessed_refs.append((channel_id, msgid))
+                        await asyncio.sleep(0.6)
         try:
             if titles:
                 shown = titles[:30]
