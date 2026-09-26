@@ -1,22 +1,22 @@
 
 
 class script(object):
-    START_TXT = """<b>ʜᴇʟʟᴏ {}, ᴍʏ ɴᴀᴍᴇ {} 👋,
+    START_TXT = """<b>Hey {}, !! 💌
 
-ɪ ᴀᴍ ʟᴀᴛᴇꜱᴛ ᴀᴅᴠᴀɴᴄᴇᴅ ᴀɴᴅ ᴘᴏᴡᴇʀꜰᴜʟ ꜰɪʟᴇ ꜱᴛᴏʀᴇ ʙᴏᴛ
+Welcome To ChillFliz File Store Bot! ✨❤️
 
-ɪ ᴄᴀɴ ꜱᴛᴏʀᴇ ꜰɪʟᴇꜱ ꜱᴀꜰᴇʟʏ, ᴀɴᴅ ᴜꜱᴇʀꜱ ᴄᴀɴ ᴀᴄᴄᴇꜱꜱ ᴛʜᴇᴍ ᴛʜʀᴏᴜɢʜ ᴛʜᴇ ᴘʀᴏᴠɪᴅᴇᴅ ꜱʜᴀʀᴇ ʟɪɴᴋ.
+📂 Access Your Content Easily Through The Links Provided. ⚡
 
-👨‍💻 ᴘᴏᴡᴇʀᴇᴅ ʙʏ: @ChillFlizX
+👨‍💻 Powered By @ChillFlizX
 
-✅ ᴀɴʏ ʀᴇǫᴜᴇꜱᴛ / ǫᴜᴇʀʏ / ꜰᴇᴇᴅʙᴀᴄᴋ / ᴘᴀɪᴅ / ᴅᴇᴍᴏ
-🧑‍🔧 ᴄᴏɴᴛᴀᴄᴛ >>> @RudraBlaze</b>"""
+💬 Need Help, Have A Request, Query, Or Feedback? We're Here To Help.
 
+🧑‍🔧 Contact >>> @ChillFlizOwnerBot</b>"""
 
     
-    CAPTION = """<b><a href="https://t.me/Mrn_Officialx">{file_caption}</a></b>
-<b>➖➖➖➖➖➖➖➖➖➖➖➖➖➖➖➖➖
-👑 ᴘʀᴇᴍɪᴜᴍ ᴀᴄᴄᴇꜱꜱ ➥ https://t.me/Mrn_Officialx/6</b>"""
+    CAPTION = """<b>{file_caption}</b>
+<b>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</b>
+<b>😘Join - Share - Like >>> @ChillFlizX⚡</b>"""
 
 
     SHORTENER_API_MESSAGE = """<b>Tᴏ ᴀᴅᴅ ᴏʀ ᴜᴘᴅᴀᴛᴇ ʏᴏᴜʀ Sʜᴏʀᴛɴᴇʀ Wᴇʙsɪᴛᴇ API, /api (ᴀᴘɪ)
