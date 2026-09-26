@@ -316,10 +316,6 @@ async def start(client, message):
                         f_caption=f_caption
                 if f_caption is None:
                     f_caption = f"{title}"
-                button = [[
-                    InlineKeyboardButton('🌺 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ 🌺', url='https://t.me/+PArBpI-yLp5hMjQ1'),
-                    InlineKeyboardButton('💎 ᴘʀᴇᴍɪᴜᴍ ᴘʟᴀɴs 💎', url='https://t.me/ChillFlizX/6')
-                ]]
                 for row in (settings.get("custom_buttons") or []):
                     button.append([InlineKeyboardButton(b["text"], url=b["url"]) for b in row])
                 button.extend(stream_download_buttons(channel_id, msgid, file))
@@ -335,10 +331,6 @@ async def start(client, message):
             else:
                 title = "Unknown File"
                 protect = settings.get("protect_content", False)
-                button = [[
-                    InlineKeyboardButton('🌺 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ 🌺', url='https://t.me/+PArBpI-yLp5hMjQ1'),
-                    InlineKeyboardButton('💎 ᴘʀᴇᴍɪᴜᴍ ᴘʟᴀɴs 💎', url='https://t.me/ChillFlizX/6')
-                ]]
                 for row in (settings.get("custom_buttons") or []):
                     button.append([InlineKeyboardButton(b["text"], url=b["url"]) for b in row])
                 reply_markup = InlineKeyboardMarkup(button)
@@ -412,10 +404,6 @@ async def start(client, message):
                     f_caption=single_caption.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if title is None else title)
                 except:
                     f_caption = f"<code>{title}</code>"
-            button = [[
-                InlineKeyboardButton('🌺 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ 🌺', url='https://t.me/+PArBpI-yLp5hMjQ1'),
-                InlineKeyboardButton('💎 ᴘʀᴇᴍɪᴜᴍ ᴘʟᴀɴs 💎', url='https://t.me/ChillFlizX/6')
-            ]]
             for row in (settings.get("custom_buttons") or []):
                 button.append([InlineKeyboardButton(b["text"], url=b["url"]) for b in row])
             button.extend(stream_download_buttons(msg.chat.id, msg.id, media))
@@ -423,10 +411,6 @@ async def start(client, message):
             del_msg = await msg.copy(chat_id=message.from_user.id, caption=f_caption, reply_markup=reply_markup, protect_content=settings.get("protect_content", False))
         else:
             title = "Unknown File"
-            button = [[
-                InlineKeyboardButton('🌺 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ 🌺', url='https://t.me/+PArBpI-yLp5hMjQ1'),
-                InlineKeyboardButton('💎 ᴘʀᴇᴍɪᴜᴍ ᴘʟᴀɴs 💎', url='https://t.me/ChillFlizX/6')
-            ]]
             for row in (settings.get("custom_buttons") or []):
                 button.append([InlineKeyboardButton(b["text"], url=b["url"]) for b in row])
             reply_markup = InlineKeyboardMarkup(button)
