@@ -15,7 +15,7 @@ Welcome To ChillFliz File Store Bot! ✨❤️
 
     
     CAPTION = """<b>{file_caption}</b>
-<b>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</b>
+<b>━━━━━━━━━━━━━━━━━━━━━━━━━━━━</b>
 <b>😘Join - Share - Like >>> @ChillFlizX⚡</b>"""
 
 
