@@ -1,7 +1,7 @@
 
 
 class script(object):
-    START_TXT = """<b>Hey {}, !! 💌
+    START_TXT = """<b>Hey {} !! 💌
 
 Welcome To ChillFliz File Store Bot! ✨❤️
 
@@ -34,24 +34,24 @@ If You Want To Remove Api Then Copy This And Send To Bot - `/api None`"""
 
 🤖 ᴍʏ ɴᴀᴍᴇ: {}
 
-📝 ʟᴀɴɢᴜᴀɢᴇ: <a href=https://www.python.org>𝐏𝐲𝐭𝐡𝐨𝐧𝟑</a>
+📝 ʟᴀɴɢᴜᴀɢᴇ: <a href=https://www.python.org>Python3</a>
 
-📚 ʟɪʙʀᴀʀʏ: <a href=https://docs.pyrogram.org>𝐏𝐲𝐫𝐨𝐠𝐫𝐚𝐦</a>
+📚 ʟɪʙʀᴀʀʏ: <a href=https://docs.pyrogram.org>Pyrogram</a>
 
-🇮🇳 ᴅᴇᴠᴇʟᴏᴘᴇʀ: <a href=https://t.me/RudraBlaze>DEVIL</a>
+👨‍💻 ᴅᴇᴠᴇʟᴏᴘᴇʀ: <a href=https://t.me/RudraBlaze>DEVIL</a>
 
-👥 sᴜᴘᴘᴏʀᴛ ɢʀᴏᴜᴘ: <a href=https://t.me/+LwFYMVKvg3FhODdl>𝖒𝖗𝖓 𝖙𝖛 𝖇𝖆𝖈𝖐-𝖚𝖕</a>
+👥 Support: <a href=https://t.me/ChillFlizOwnerBot>Contact Bot</a>
 
-📢 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ: <a href=https://t.me/Mrn_Officialx>𝖒𝖗𝖓 𝖚𝖕𝖉𝖆𝖙𝖊 𝖈𝖍𝖆𝖓𝖓𝖊𝖑</a></b>
+📢 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ: <a href=https://t.me/ChillFlizX></a></b>
 """
 
     CABOUT_TXT = """<b>ʜɪ ɪ ᴀᴍ ᴘᴇʀᴍᴀɴᴇɴᴛ ғɪʟᴇ sᴛᴏʀᴇ ʙᴏᴛ ᴡɪᴛʜ ᴄʟᴏɴᴇ ғᴇᴀᴛᴜʀᴇ + ᴄᴜsᴛᴏᴍ ᴜʀʟ sʜᴏʀᴛɴᴇʀ ɪᴛ ᴍᴇᴀɴs ᴀɴʏ ᴜsᴇʀ ᴄᴀɴ sᴇᴛ ʜɪs ᴜʀʟ sʜᴏʀᴛɴᴇʀ ᴀɴᴅ + ᴀᴜᴛᴏ ᴅᴇʟᴇᴛᴇ.
 
 🤖 ᴍʏ ɴᴀᴍᴇ: {}
 
-📝 ʟᴀɴɢᴜᴀɢᴇ: <a href=https://www.python.org>𝐏𝐲𝐭𝐡𝐨𝐧𝟑</a>
+📝 ʟᴀɴɢᴜᴀɢᴇ: <a href=https://www.python.org>Python3</a>
 
-📚 ʟɪʙʀᴀʀʏ: <a href=https://docs.pyrogram.org>𝐏𝐲𝐫𝐨𝐠𝐫𝐚𝐦</a>
+📚 ʟɪʙʀᴀʀʏ: <a href=https://docs.pyrogram.org>Pyrogram</a>
 
 🧑🏻‍💻 ᴅᴇᴠᴇʟᴏᴘᴇʀ: <a href=tg://user?id={}>ᴅᴇᴠᴇʟᴏᴘᴇʀ</a></b>
 """
