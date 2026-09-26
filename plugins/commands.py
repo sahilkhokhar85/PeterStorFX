@@ -272,14 +272,14 @@ async def start(client, message):
         msgs = BATCH_FILES.get(file_id)
         if not msgs:
             decode_file_id = base64.urlsafe_b64decode(file_id + "=" * (-len(file_id) % 4)).decode("ascii")
-                msg = await client.get_messages(LOG_CHANNEL, int(decode_file_id))
-                # Sticker: copy directly without Stream/Download buttons
-                if msg.sticker:
+            msg = await client.get_messages(LOG_CHANNEL, int(decode_file_id))
+            # Sticker: copy directly without Stream/Download buttons
+            if msg.sticker:
                 try:
                     del_msg = await msg.copy(
-                    chat_id=message.from_user.id,
+                        chat_id=message.from_user.id,
                         protect_content=settings.get("protect_content", False)
-                        )
+                    )
 
                     title = "Sticker"
 
@@ -289,40 +289,40 @@ async def start(client, message):
                         f"👤 User: {message.from_user.mention} (<code>{message.from_user.id}</code>)\n"
                         f"🎬 File: <code>{title}</code>"
                     )
-
-            asyncio.create_task(_forward_single_to_log(client, msg))
+                    
+                    asyncio.create_task(_forward_single_to_log(client, msg))
 
                     if settings.get("auto_delete", True):
                         del_minutes = max(1, settings.get("auto_delete_time", 1800) // 60)
 
                         k = await client.send_message(
-            chat_id=message.from_user.id,
-            text=f"<b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                                f"This Movie File/Video will be deleted in "
-                                f"<b><u>{del_minutes} minutes</u> 🫥 "
-                                f"<i></b>(Due to Copyright Issues)</i>.\n\n"
-                                f"<b><i>Please forward this File/Video to your Saved Messages "
-                                f"and Start Download there</b>"
+                            chat_id=message.from_user.id,
+                            text=f"<b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
+                            f"This Movie File/Video will be deleted in "
+                            f"<b><u>{del_minutes} minutes</u> 🫥 "
+                            f"<i></b>(Due to Copyright Issues)</i>.\n\n"
+                            f"<b><i>Please forward this File/Video to your Saved Messages "
+                            f"and Start Download there</b>"
                         )
 
                         _spawn(
-            _delete_single_later(
-            settings.get("auto_delete_time", 1800),
+                            _delete_single_later(
+                                settings.get("auto_delete_time", 1800),
                                 del_msg,
                                 k
                             )
                         )
 
                     return
-
-    except Exception as e:
-        logger.error(f"Failed to deliver sticker: {e}", exc_info=True)
-        return await message.reply_text(
-            "<b>❌ Sticker could not be delivered.</b>"
-        )
+                
+                except Exception as e:
+                    logger.error(f"Failed to deliver sticker: {e}", exc_info=True)
+                    return await message.reply_text(
+                        "<b>❌ Sticker could not be delivered.</b>"
+                    )
             media = getattr(msg, msg.media.value)
             file = await client.download_media(media.file_id)  # keep file_id intact - it is the BATCH_FILES cache key
-            try: 
+            try:
                 with open(file) as file_data:
                     msgs=json.loads(file_data.read())
             except:
