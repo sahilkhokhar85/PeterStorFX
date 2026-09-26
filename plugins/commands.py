@@ -44,23 +44,38 @@ def formate_file_name(file_name):
 
 
 def stream_download_buttons(chat_id, message_id, media):
-    """Fast Download / Watch Online button row for a delivered file.
-    Built from data already in hand (no extra Telegram API call). Returns
-    [] if STREAM_MODE is off or the media has no usable file info."""
+    """Fast Download / Watch Online buttons only for supported file types."""
     if not STREAM_MODE:
         return []
+
     try:
+        # Stream buttons only for actual downloadable/streamable files
+        if not hasattr(media, "file_name") or not media.file_name:
+            return []
+
         download_url, watch_url = build_stream_urls(
-            chat_id, message_id,
+            chat_id,
+            message_id,
             getattr(media, "file_unique_id", ""),
-            getattr(media, "file_name", "") or "file",
+            media.file_name,
         )
+
         return [[
-            InlineKeyboardButton('🚀 ꜰᴀꜱᴛ ᴅᴏᴡɴʟᴏᴀᴅ 🚀', url=download_url),
-            InlineKeyboardButton('🖥 ᴡᴀᴛᴄʜ ᴏɴʟɪɴᴇ 🖥', url=watch_url),
+            InlineKeyboardButton(
+                '🚀 ꜰᴀsᴛ ᴅᴏᴡɴʟᴏᴀᴅ',
+                url=download_url
+            ),
+            InlineKeyboardButton(
+                '🖥 ᴡᴀᴛᴄʜ ᴏɴʟɪɴᴇ',
+                url=watch_url
+            ),
         ]]
+
     except Exception:
-        logger.error("Failed to build stream/download buttons", exc_info=True)
+        logger.error(
+            "Failed to build stream/download buttons",
+            exc_info=True
+        )
         return []
 
 
