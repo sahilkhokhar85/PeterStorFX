@@ -173,11 +173,11 @@ async def start(client, message):
 
     if len(message.command) != 2:
         buttons = [[
-            InlineKeyboardButton('💁‍♀️ ᴍᴀɪɴᴛᴀɪɴᴇʀ', url='https://t.me/RudraBlaze'),
-            InlineKeyboardButton('⚜️ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url='https://t.me/ChillFlizX')
+            InlineKeyboardButton('👨‍💻 ᴍᴀɪɴᴛᴀɪɴᴇʀ', url='https://t.me/RudraBlaze'),
+            InlineKeyboardButton('📢 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url='https://t.me/ChillFlizX')
             ],[
-            InlineKeyboardButton('💁‍♀️ ʜᴇʟᴘ', callback_data='help'),
-            InlineKeyboardButton('😊 ᴀʙᴏᴜᴛ', callback_data='about')
+            InlineKeyboardButton('💁‍♂️ ʜᴇʟᴘ', callback_data='help'),
+            InlineKeyboardButton('💎 ᴀʙᴏᴜᴛ', callback_data='about')
         ]]
         reply_markup = InlineKeyboardMarkup(buttons)
         me = client.me
