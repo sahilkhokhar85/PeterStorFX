@@ -297,12 +297,13 @@ async def start(client, message):
 
                         k = await client.send_message(
                             chat_id=message.from_user.id,
-                            text=f"<b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                            f"This Movie File/Video will be deleted in "
-                            f"<b><u>{del_minutes} minutes</u> 🫥 "
-                            f"<i></b>(Due to Copyright Issues)</i>.\n\n"
-                            f"<b><i>Please forward this File/Video to your Saved Messages "
-                            f"and Start Download there</b>"
+                            text=f"<b>🔔 Just a Quick Reminder !!\n\n"
+                            f"⏳ This Content Will Be Automatically Deleted After <u>{del_minutes} Minutes</u> Due to Copyright Issues.\n\n"
+                            f"🔗 Once Deleted, You’ll Need to Open the Link Again to Access It.\n\n"
+                            f"📌 Want to Keep It? Save or Forward It to your Saved Messages Before It Expires. 👍\n\n"
+                            f"❤️ Save It Now, Enjoy It Later! 💫\n\n"
+                            f"👨‍💻 Powered By @ChillFlizX⚡️\n\n"
+                            f"🧑‍🔧 Help & Support >>> @ChillFlizOwnerBot</b>"
                         )
 
                         _spawn(
