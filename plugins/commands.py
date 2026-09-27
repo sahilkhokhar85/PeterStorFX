@@ -546,41 +546,40 @@ async def start(client, message):
                 protect_content=settings.get("protect_content", False)
             )
 
-        else:
-            real_file_types = (
-                "document",
-                "video",
-                "audio",
-                "photo",
-                "animation",
-                "voice",
-                "video_note"
+        # Text message: send text directly without media/buttons
+        elif msg.text:
+            title = "Text Message"
+
+            del_msg = await client.send_message(
+                chat_id=message.from_user.id,
+                text=msg.text,
+                entities=msg.entities,
+                protect_content=settings.get("protect_content", False)
             )
 
-            if msg.media and msg.media.value in real_file_types:
-                media = getattr(msg, msg.media.value)
+        # Media files
+        elif msg.media:
+            media = getattr(msg, msg.media.value)
+            media_type = msg.media.value
 
+            # Photo
+            if media_type == "photo":
                 orig_caption = getattr(msg, "caption", None)
                 orig_caption = orig_caption.html if orig_caption else None
 
-                title = orig_caption or formate_file_name(
-                    getattr(media, "file_name", "")
-                )
+                title = orig_caption or "Photo"
 
-                size = get_size(media.file_size)
-                f_caption = f"<code>{title}</code>"
+                photo_caption = settings.get("custom_caption") or CUSTOM_FILE_CAPTION
 
-                single_caption = settings.get("custom_caption") or CUSTOM_FILE_CAPTION
-
-                if single_caption:
+                if photo_caption:
                     try:
-                        f_caption = single_caption.format(
-                            file_name="" if title is None else title,
-                            file_size="" if size is None else size,
-                            file_caption="" if title is None else title
+                        photo_caption = photo_caption.format(
+                            file_name=title,
+                            file_size=get_size(getattr(media, "file_size", 0) or 0),
+                            file_caption=title
                         )
                     except Exception:
-                        f_caption = f"<code>{title}</code>"
+                        photo_caption = orig_caption
 
                 button = []
 
@@ -593,44 +592,107 @@ async def start(client, message):
                         for b in row
                     ])
 
-                button.extend(
-                    stream_download_buttons(
-                        msg.chat.id,
-                        msg.id,
-                        media
-                    )
-                )
-
-                reply_markup = InlineKeyboardMarkup(button)
+                reply_markup = InlineKeyboardMarkup(button) if button else None
 
                 del_msg = await msg.copy(
                     chat_id=message.from_user.id,
-                    caption=f_caption,
+                    caption=photo_caption,
                     reply_markup=reply_markup,
                     protect_content=settings.get("protect_content", False)
                 )
 
             else:
-                title = "Unknown File"
-
-                button = []
-
-                for row in (settings.get("custom_buttons") or []):
-                    button.append([
-                        InlineKeyboardButton(
-                            b["text"],
-                            url=b["url"]
-                        )
-                        for b in row
-                    ])
-
-                reply_markup = InlineKeyboardMarkup(button)
-
-                del_msg = await msg.copy(
-                    chat_id=message.from_user.id,
-                    reply_markup=reply_markup,
-                    protect_content=settings.get("protect_content", False)
+                real_file_types = (
+                    "document",
+                    "video",
+                    "audio",
+                    "animation",
+                    "voice",
+                    "video_note"
                 )
+
+                if media_type in real_file_types:
+                    orig_caption = getattr(msg, "caption", None)
+                    orig_caption = orig_caption.html if orig_caption else None
+
+                    title = orig_caption or formate_file_name(
+                        getattr(media, "file_name", "")
+                    )
+
+                    file_size = getattr(media, "file_size", 0) or 0
+                    size = get_size(file_size)
+
+                    f_caption = f"<code>{title}</code>"
+
+                    single_caption = settings.get("custom_caption") or CUSTOM_FILE_CAPTION
+
+                    if single_caption:
+                        try:
+                            f_caption = single_caption.format(
+                                file_name="" if title is None else title,
+                                file_size="" if size is None else size,
+                                file_caption="" if title is None else title
+                            )
+                        except Exception:
+                            f_caption = f"<code>{title}</code>"
+
+                    button = []
+
+                    for row in (settings.get("custom_buttons") or []):
+                        button.append([
+                            InlineKeyboardButton(
+                                b["text"],
+                                url=b["url"]
+                            )
+                            for b in row
+                        ])
+
+                    button.extend(
+                        stream_download_buttons(
+                            msg.chat.id,
+                            msg.id,
+                            media
+                        )
+                    )
+
+                    reply_markup = InlineKeyboardMarkup(button)
+
+                    del_msg = await msg.copy(
+                        chat_id=message.from_user.id,
+                        caption=f_caption,
+                        reply_markup=reply_markup,
+                        protect_content=settings.get("protect_content", False)
+                    )
+
+                else:
+                    title = "File"
+
+                    button = []
+
+                    for row in (settings.get("custom_buttons") or []):
+                        button.append([
+                            InlineKeyboardButton(
+                                b["text"],
+                                url=b["url"]
+                            )
+                            for b in row
+                        ])
+
+                    reply_markup = InlineKeyboardMarkup(button) if button else None
+
+                    del_msg = await msg.copy(
+                        chat_id=message.from_user.id,
+                        reply_markup=reply_markup,
+                        protect_content=settings.get("protect_content", False)
+                    )
+
+        else:
+            title = "Unknown Message"
+
+            del_msg = await msg.copy(
+                chat_id=message.from_user.id,
+                protect_content=settings.get("protect_content", False)
+            )
         try:
             await client.send_message(
                 LOG_CHANNEL,
