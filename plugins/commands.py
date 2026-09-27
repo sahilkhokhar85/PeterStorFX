@@ -631,36 +631,6 @@ async def start(client, message):
                     reply_markup=reply_markup,
                     protect_content=settings.get("protect_content", False)
                 )
-        if msg.media and msg.media.value in real_file_types:
-            media = getattr(msg, msg.media.value)
-            orig_caption = getattr(msg, 'caption', None)
-            orig_caption = orig_caption.html if orig_caption else None
-            title = orig_caption or formate_file_name(getattr(media, "file_name", ""))
-            size=get_size(media.file_size)
-            f_caption = f"<code>{title}</code>"
-            single_caption = settings.get("custom_caption") or CUSTOM_FILE_CAPTION
-            if single_caption:
-                try:
-                    f_caption=single_caption.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if title is None else title)
-                except:
-                    f_caption = f"<code>{title}</code>"
-
-            button = []
-            
-            for row in (settings.get("custom_buttons") or []):
-                button.append([InlineKeyboardButton(b["text"], url=b["url"]) for b in row])
-            button.extend(stream_download_buttons(msg.chat.id, msg.id, media))
-            reply_markup = InlineKeyboardMarkup(button)
-            del_msg = await msg.copy(chat_id=message.from_user.id, caption=f_caption, reply_markup=reply_markup, protect_content=settings.get("protect_content", False))
-        else:
-            title = "Unknown File"
-
-            button = []
-            
-            for row in (settings.get("custom_buttons") or []):
-                button.append([InlineKeyboardButton(b["text"], url=b["url"]) for b in row])
-            reply_markup = InlineKeyboardMarkup(button)
-            del_msg = await msg.copy(chat_id=message.from_user.id, reply_markup=reply_markup, protect_content=settings.get("protect_content", False))
         try:
             await client.send_message(
                 LOG_CHANNEL,
