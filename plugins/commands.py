@@ -565,21 +565,9 @@ async def start(client, message):
             # Photo
             if media_type == "photo":
                 orig_caption = getattr(msg, "caption", None)
-                orig_caption = orig_caption.html if orig_caption else None
+                photo_caption = orig_caption.html if orig_caption else None
 
-                title = orig_caption or "Photo"
-
-                photo_caption = settings.get("custom_caption") or CUSTOM_FILE_CAPTION
-
-                if photo_caption:
-                    try:
-                        photo_caption = photo_caption.format(
-                            file_name=title,
-                            file_size=get_size(getattr(media, "file_size", 0) or 0),
-                            file_caption=title
-                        )
-                    except Exception:
-                        photo_caption = orig_caption
+                title = "Photo"
 
                 button = []
 
