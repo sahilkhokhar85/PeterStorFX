@@ -517,7 +517,16 @@ async def start(client, message):
         await sts.delete()
         if settings.get("auto_delete", True):
             del_minutes = max(1, settings.get("auto_delete_time", 1800) // 60)
-            k = await client.send_message(chat_id = message.from_user.id, text=f"<b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nThis Movie File/Video will be deleted in <b><u>{del_minutes} minutes</u> 🫥 <i></b>(Due to Copyright Issues)</i>.\n\n<b><i>Please forward this File/Video to your Saved Messages and Start Download there</b>")
+            k = await client.send_message(
+                chat_id = message.from_user.id,
+                text=f"<b>🔔 Just a Quick Reminder !!\n\n"
+                f"⏳ This Content Will Be Automatically Deleted After <u>{del_minutes} Minutes</u> Due to Copyright Issues.\n\n"
+                f"🔗 Once Deleted, You’ll Need to Open the Link Again to Access It.\n\n"
+                f"📌 Want to Keep It? Save or Forward It to your Saved Messages Before It Expires. 👍\n\n"
+                f"❤️ Save It Now, Enjoy It Later! 💫\n\n"
+                f"👨‍💻 Powered By @ChillFlizX⚡️\n\n"
+                f"🧑‍🔧 Help & Support >>> @ChillFlizOwnerBot</b>"
+            )
             _spawn(_delete_batch_later(settings.get("auto_delete_time", 1800), filesarr, k))
         return
 
@@ -696,7 +705,16 @@ async def start(client, message):
             pass
         if settings.get("auto_delete", True):
             del_minutes = max(1, settings.get("auto_delete_time", 1800) // 60)
-            k = await client.send_message(chat_id = message.from_user.id, text=f"<b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nThis Movie File/Video will be deleted in <b><u>{del_minutes} minutes</u> 🫥 <i></b>(Due to Copyright Issues)</i>.\n\n<b><i>Please forward this File/Video to your Saved Messages and Start Download there</b>")
+            k = await client.send_message(
+                chat_id = message.from_user.id,
+                text=f"<b>🔔 Just a Quick Reminder !!\n\n"
+                f"⏳ This Content Will Be Automatically Deleted After <u>{del_minutes} Minutes</u> Due to Copyright Issues.\n\n"
+                f"🔗 Once Deleted, You’ll Need to Open the Link Again to Access It.\n\n"
+                f"📌 Want to Keep It? Save or Forward It to your Saved Messages Before It Expires. 👍\n\n"
+                f"❤️ Save It Now, Enjoy It Later! 💫\n\n"
+                f"👨‍💻 Powered By @ChillFlizX⚡️\n\n"
+                f"🧑‍🔧 Help & Support >>> @ChillFlizOwnerBot</b>"
+            )
             _spawn(_delete_single_later(settings.get("auto_delete_time", 1800), del_msg, k))
         return
     except Exception as e:
