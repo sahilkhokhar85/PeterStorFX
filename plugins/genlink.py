@@ -35,15 +35,16 @@ PERMANENT_LINK_ADMIN_KEY = os.getenv("PERMANENT_LINK_ADMIN_KEY")
 async def create_permanent_link(destination):
     """
     Sends the original File Store URL to the Cloudflare Worker.
-
     Worker creates the current shortener URL internally and returns
-    a permanent Worker URL which can safely be used in posts.
+    a permanent Worker URL.
     """
 
     if not PERMANENT_LINK_WORKER_URL:
+        print("PERMANENT LINK ERROR: PERMANENT_LINK_WORKER_URL is missing")
         return None
 
     if not PERMANENT_LINK_ADMIN_KEY:
+        print("PERMANENT LINK ERROR: PERMANENT_LINK_ADMIN_KEY is missing")
         return None
 
     api_url = f"{PERMANENT_LINK_WORKER_URL.rstrip('/')}/admin/create-link"
@@ -67,16 +68,42 @@ async def create_permanent_link(destination):
                 headers=headers
             ) as response:
 
-                data = await response.json(content_type=None)
+                response_text = await response.text()
 
-                if response.status == 200 and data.get("success"):
-                    return data.get("permanentUrl")
+                print(
+                    f"PERMANENT LINK WORKER RESPONSE: "
+                    f"HTTP {response.status} | {response_text}"
+                )
 
-    except Exception:
-        pass
+                if response.status != 200:
+                    return None
+
+                try:
+                    data = json.loads(response_text)
+                except json.JSONDecodeError:
+                    print("PERMANENT LINK ERROR: Worker returned invalid JSON")
+                    return None
+
+                if data.get("success"):
+                    permanent_url = data.get("permanentUrl")
+
+                    if permanent_url:
+                        print(
+                            f"PERMANENT LINK CREATED: {permanent_url}"
+                        )
+                        return permanent_url
+
+                print(
+                    f"PERMANENT LINK ERROR: Unexpected Worker response: {data}"
+                )
+
+    except Exception as e:
+        print(
+            f"PERMANENT LINK REQUEST ERROR: "
+            f"{type(e).__name__}: {e}"
+        )
 
     return None
-
 
 # ============================================================
 # ACCESS CONTROL
