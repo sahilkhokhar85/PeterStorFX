@@ -13,6 +13,7 @@ from utils import verify_user, check_token, check_verification, get_token
 from plugins.settings_db import get_settings
 from plugins.force_sub import not_joined_channels, force_sub_join_buttons, get_missing_and_buttons
 from TechVJ.server.streamer import build_stream_urls
+from TechVJ.utils.cover_copy import copy_keep_cover as _copy_media
 from config import *
 import re
 import json
@@ -441,16 +442,18 @@ async def start(client, message):
                 protect = settings.get("protect_content", False)
 
                 try:
-                    msg = await info.copy(
-                        chat_id=message.from_user.id,
+                    msg = await _copy_media(
+                        info,
+                        message.from_user.id,
                         caption=f_caption,
                         protect_content=protect,
                         reply_markup=reply_markup
                     )
                 except FloodWait as e:
                     await asyncio.sleep(e.value)
-                    msg = await info.copy(
-                        chat_id=message.from_user.id,
+                    msg = await _copy_media(
+                        info,
+                        message.from_user.id,
                         caption=f_caption,
                         protect_content=protect,
                         reply_markup=reply_markup
@@ -655,8 +658,9 @@ async def start(client, message):
 
                     reply_markup = InlineKeyboardMarkup(button)
 
-                    del_msg = await msg.copy(
-                        chat_id=message.from_user.id,
+                    del_msg = await _copy_media(
+                        msg,
+                        message.from_user.id,
                         caption=f_caption,
                         reply_markup=reply_markup,
                         protect_content=settings.get("protect_content", False)
