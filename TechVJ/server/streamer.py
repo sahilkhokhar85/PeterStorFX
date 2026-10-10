@@ -1,39 +1,17 @@
 """
 Fast Download / Watch Online streaming support.
-
-This is a single-file, single-bot-client adaptation of the well known
-Telegram "file-to-link" streaming technique (the same idea used by
-DreamXBotz / FileStreamBot and friends): instead of re-downloading a
-file to disk, Telegram's raw upload.GetFile API is called directly and
-the bytes are streamed straight to the browser, chunk by chunk, with
-proper HTTP Range support so a <video> tag can seek/play instantly and
-a download manager can resume a partial download.
-
-Design notes specific to this project (kept intentionally simpler than
-a lot of the reference bots this technique is copied from):
-
-- Single bot client only (no MULTI_CLIENT / work_loads load-balancing).
-  This project runs one bot token, so there is nothing to balance.
-- No separate BIN_CHANNEL / forwarding step. Every file this bot ever
-  hands out is fetched by (chat_id, message_id) - that's exactly the
-  same (channel, message id) pair genlink.py/commands.py already read
-  the file from - so the stream link is built from data already in
-  hand, with zero extra Telegram API calls.
-- The (chat_id, message_id) pair is packed into one URL-safe token
-  instead of a raw numeric path, since chat_id for a channel is a
-  large negative number.
 """
 
+import asyncio
 import base64
 import logging
 import math
 import mimetypes
 import urllib.parse
-import asyncio
 from typing import Any, Dict, Optional, Tuple
 
 from aiohttp import web
-from pyrogram import raw, utils
+from pyrogram import raw
 from pyrogram.errors import AuthBytesInvalid
 from pyrogram.file_id import FileId
 from pyrogram.session import Auth, Session
@@ -43,7 +21,7 @@ from config import URL
 logger = logging.getLogger(__name__)
 
 MEDIA_TYPES = ("document", "video", "audio", "photo", "animation", "voice", "video_note")
-CHUNK_SIZE = 1024 * 1024  # 1 MiB, must stay a multiple of 4096 (Telegram requirement)
+CHUNK_SIZE = 1024 * 1024
 
 
 class StreamFileNotFound(Exception):
@@ -53,10 +31,6 @@ class StreamFileNotFound(Exception):
 class InvalidStreamHash(Exception):
     message = "Invalid or expired link."
 
-
-# ---------------------------------------------------------------------------
-# Token = base64("<chat_id>:<message_id>"), URL-safe, no padding.
-# ---------------------------------------------------------------------------
 
 def encode_stream_token(chat_id: int, message_id: int) -> str:
     raw_token = f"{chat_id}:{message_id}".encode("ascii")
@@ -88,16 +62,11 @@ def _dl_url(chat_id: int, message_id: int, file_unique_id: str, file_name: str, 
     base = URL if URL.endswith("/") else URL + "/"
     query = f"hash={secure_hash}"
     if force_download:
-        query += "&dl=1"  # tells stream_media() to send Content-Disposition: attachment
+        query += "&dl=1"
     return f"{base}dl/{token}/{safe_name}?{query}"
 
 
 def build_stream_urls(chat_id: int, message_id: int, file_unique_id: str, file_name: str) -> Tuple[str, str]:
-    """Build (download_url, watch_url) for a file already sitting at
-    (chat_id, message_id) - no network call, pure string building.
-    download_url forces an actual download (dl=1); watch_url opens the
-    HTML player page, whose <video>/<audio> src is a separate, inline
-    (non-forced) link so it plays instead of downloading."""
     download_url = _dl_url(chat_id, message_id, file_unique_id, file_name, force_download=True)
     token = encode_stream_token(chat_id, message_id)
     secure_hash = (file_unique_id or "")[:6]
@@ -120,9 +89,6 @@ def humanbytes(size) -> str:
 
 
 class ByteStreamer:
-    """Holds cached FileId properties for a single Pyrogram client and
-    yields raw media bytes straight from Telegram's DC servers."""
-
     def __init__(self, client):
         self.client = client
         self.cached_file_ids: Dict[Tuple[int, int], FileId] = {}
@@ -146,27 +112,34 @@ class ByteStreamer:
         file_id.mime_type = getattr(media, "mime_type", "") or ""
         file_id.file_name = getattr(media, "file_name", "") or ""
         file_id.unique_id = getattr(media, "file_unique_id", "") or ""
-        self.cached_file_ids[(chat_id, message_id)] = file_id
+        self.cached_file_ids[key] = file_id
         return file_id
 
     async def generate_media_session(self, file_id: FileId) -> Session:
         client = self.client
-        media_session = client.media_sessions.get(file_id.dc_id, None)
+        media_session = client.media_sessions.get(file_id.dc_id)
         if media_session is not None:
             return media_session
 
+        test_mode = await client.storage.test_mode()
         if file_id.dc_id != await client.storage.dc_id():
             media_session = Session(
-                client, file_id.dc_id,
-                await Auth(client, file_id.dc_id, await client.storage.test_mode()).create(),
-                await client.storage.test_mode(), is_media=True,
+                client,
+                file_id.dc_id,
+                await Auth(client, file_id.dc_id, test_mode).create(),
+                test_mode,
+                is_media=True,
             )
             await media_session.start()
             for _ in range(6):
-                exported_auth = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=file_id.dc_id))
+                exported_auth = await client.invoke(
+                    raw.functions.auth.ExportAuthorization(dc_id=file_id.dc_id)
+                )
                 try:
                     await media_session.send(
-                        raw.functions.auth.ImportAuthorization(id=exported_auth.id, bytes=exported_auth.bytes)
+                        raw.functions.auth.ImportAuthorization(
+                            id=exported_auth.id, bytes=exported_auth.bytes
+                        )
                     )
                     break
                 except AuthBytesInvalid:
@@ -176,8 +149,11 @@ class ByteStreamer:
                 raise AuthBytesInvalid
         else:
             media_session = Session(
-                client, file_id.dc_id, await client.storage.auth_key(),
-                await client.storage.test_mode(), is_media=True,
+                client,
+                file_id.dc_id,
+                await client.storage.auth_key(),
+                test_mode,
+                is_media=True,
             )
             await media_session.start()
 
@@ -197,40 +173,47 @@ class ByteStreamer:
         media_session = await self.generate_media_session(file_id)
         location = await self.get_location(file_id)
         current_part = 1
-        try:
-            r = await media_session.send(raw.functions.upload.GetFile(location=location, offset=offset, limit=chunk_size))
-            if isinstance(r, raw.types.upload.File):
-                while True:
-                    chunk = r.bytes
-                    if not chunk:
-                        break
-                    elif part_count == 1:
-                        yield chunk[first_part_cut:last_part_cut]
-                    elif current_part == 1:
-                        yield chunk[first_part_cut:]
-                    elif current_part == part_count:
-                        yield chunk[:last_part_cut]
-                    else:
-                        yield chunk
-                    current_part += 1
-                    offset += chunk_size
-                    if current_part > part_count:
-                        break
-                    r = await media_session.send(raw.functions.upload.GetFile(location=location, offset=offset, limit=chunk_size))
-        except (TimeoutError, AttributeError):
-            pass
+        r = await media_session.send(
+            raw.functions.upload.GetFile(location=location, offset=offset, limit=chunk_size)
+        )
+        if not isinstance(r, raw.types.upload.File):
+            raise StreamFileNotFound
+
+        while True:
+            chunk = r.bytes
+            if not chunk:
+                break
+
+            if part_count == 1:
+                data = chunk[first_part_cut:last_part_cut]
+            elif current_part == 1:
+                data = chunk[first_part_cut:]
+            elif current_part == part_count:
+                data = chunk[:last_part_cut]
+            else:
+                data = chunk
+
+            if data:
+                yield data
+
+            current_part += 1
+            offset += chunk_size
+            if current_part > part_count:
+                break
+            r = await media_session.send(
+                raw.functions.upload.GetFile(location=location, offset=offset, limit=chunk_size)
+            )
+            if not isinstance(r, raw.types.upload.File):
+                break
 
 
-# Created lazily (on first request) rather than at import time, since building
-# it needs a running asyncio loop and this module is imported before the bot
-# actually starts polling/idling.
 _streamer: Optional[ByteStreamer] = None
 
 
 def get_streamer() -> ByteStreamer:
     global _streamer
     if _streamer is None:
-        from TechVJ.bot import StreamBot  # local import: avoids any import-order surprises
+        from TechVJ.bot import StreamBot
         _streamer = ByteStreamer(StreamBot)
     return _streamer
 
@@ -243,97 +226,40 @@ _WATCH_PAGE = """<!DOCTYPE html>
 <title>{file_name} | Mrn Officialx</title>
 <style>
   :root {{
-    --bg: #05070d;
-    --panel: rgba(20,24,38,.75);
-    --border: rgba(255,255,255,.08);
-    --text: #f4f6fb;
-    --muted: #98a2b8;
-    --gold: #f5c453;
-    --rose: #f43f5e;
+    --bg: #05070d; --panel: rgba(20,24,38,.75); --border: rgba(255,255,255,.08);
+    --text: #f4f6fb; --muted: #98a2b8; --gold: #f5c453; --rose: #f43f5e;
   }}
   * {{ box-sizing: border-box; }}
   body {{
-    margin: 0;
-    min-height: 100vh;
-    font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+    margin: 0; min-height: 100vh; font-family: 'Segoe UI', Roboto, Arial, sans-serif;
     background: radial-gradient(circle at top, #131a2c, var(--bg) 65%);
-    color: var(--text);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
+    color: var(--text); display: flex; flex-direction: column; align-items: center;
     padding: 24px 14px 48px;
   }}
   .brand {{
-    font-weight: 800;
-    letter-spacing: .5px;
-    margin-bottom: 18px;
-    font-size: 1.15rem;
+    font-weight: 800; letter-spacing: .5px; margin-bottom: 18px; font-size: 1.15rem;
     background: linear-gradient(120deg, var(--gold), var(--rose));
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
   }}
   .card {{
-    width: 100%;
-    max-width: 780px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    overflow: hidden;
-    backdrop-filter: blur(10px);
+    width: 100%; max-width: 780px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 16px; overflow: hidden; backdrop-filter: blur(10px);
   }}
-  video, audio {{
-    width: 100%;
-    display: block;
-    background: #000;
-  }}
+  video, audio {{ width: 100%; display: block; background: #000; }}
   audio {{ padding: 28px 16px; }}
   .info {{ padding: 18px 20px 6px; }}
-  .title {{
-    font-size: 1.02rem;
-    font-weight: 600;
-    word-break: break-word;
-  }}
-  .meta {{
-    margin-top: 4px;
-    color: var(--muted);
-    font-size: .85rem;
-  }}
-  .actions {{
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    padding: 16px 20px 22px;
-  }}
+  .title {{ font-size: 1.02rem; font-weight: 600; word-break: break-word; }}
+  .meta {{ margin-top: 4px; color: var(--muted); font-size: .85rem; }}
+  .actions {{ display: flex; flex-wrap: wrap; gap: 10px; padding: 16px 20px 22px; }}
   .btn {{
-    flex: 1 1 150px;
-    text-align: center;
-    text-decoration: none;
-    padding: 12px 14px;
-    border-radius: 10px;
-    font-weight: 600;
-    font-size: .9rem;
-    border: 1px solid var(--border);
-    color: var(--text);
-    background: rgba(255,255,255,.04);
-    transition: transform .15s ease;
+    flex: 1 1 150px; text-align: center; text-decoration: none; padding: 12px 14px;
+    border-radius: 10px; font-weight: 600; font-size: .9rem; border: 1px solid var(--border);
+    color: var(--text); background: rgba(255,255,255,.04); transition: transform .15s ease;
   }}
   .btn:active {{ transform: scale(.97); }}
-  .btn.primary {{
-    background: linear-gradient(120deg, var(--gold), var(--rose));
-    color: #10131d;
-    border: none;
-  }}
-  .players {{
-    padding: 0 20px 26px;
-    color: var(--muted);
-    font-size: .82rem;
-  }}
-  .players a {{
-    color: var(--gold);
-    text-decoration: none;
-    margin-right: 12px;
-  }}
+  .btn.primary {{ background: linear-gradient(120deg, var(--gold), var(--rose)); color: #10131d; border: none; }}
+  .players {{ padding: 0 20px 26px; color: var(--muted); font-size: .82rem; }}
+  .players a {{ color: var(--gold); text-decoration: none; margin-right: 12px; }}
 </style>
 </head>
 <body>
@@ -371,15 +297,13 @@ async def stream_media(request: web.Request, chat_id: int, message_id: int, secu
         raise StreamFileNotFound
 
     range_header = request.headers.get("Range")
-    start = 0
-    end = file_size - 1
+    start, end = 0, file_size - 1
 
     if range_header:
         try:
             unit, _, value = range_header.partition("=")
             if unit.strip() != "bytes":
                 raise ValueError
-
             first, _, last = value.partition("-")
             if not first:
                 suffix_length = int(last)
@@ -389,44 +313,28 @@ async def stream_media(request: web.Request, chat_id: int, message_id: int, secu
             else:
                 start = int(first)
                 end = int(last) if last else file_size - 1
-
             if start < 0 or start >= file_size or end < start:
                 raise ValueError
-
             end = min(end, file_size - 1)
         except (ValueError, TypeError):
-            return web.Response(
-                status=416,
-                headers={"Content-Range": f"bytes */{file_size}"},
-            )
+            return web.Response(status=416, headers={"Content-Range": f"bytes */{file_size}"})
 
     length = end - start + 1
+    file_name = (file_id.file_name or "file").replace('"', "")
     headers = {
-        "Content-Type": (
-            file_id.mime_type
-            or mimetypes.guess_type(file_id.file_name or "")[0]
-            or "application/octet-stream"
-        ),
+        "Content-Type": file_id.mime_type or mimetypes.guess_type(file_id.file_name or "")[0] or "application/octet-stream",
         "Content-Length": str(length),
-        "Content-Disposition": (
-            'attachment' if request.rel_url.query.get("dl") == "1" else 'inline'
-        ) + f'; filename="{(file_id.file_name or "file").replace(chr(34), "")}"',
+        "Content-Disposition": ('attachment' if request.rel_url.query.get("dl") == "1" else 'inline') + f'; filename="{file_name}"',
         "Accept-Ranges": "bytes",
         "Cache-Control": "no-cache",
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
     }
-
     if range_header:
         headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
 
-    response = web.StreamResponse(
-        status=206 if range_header else 200,
-        headers=headers,
-    )
-
+    response = web.StreamResponse(status=206 if range_header else 200, headers=headers)
     await response.prepare(request)
-
     if request.method == "HEAD":
         return response
 
@@ -437,8 +345,7 @@ async def stream_media(request: web.Request, chat_id: int, message_id: int, secu
 
     try:
         async for chunk in streamer.yield_file(
-            file_id, offset, first_part_cut, last_part_cut,
-            part_count, CHUNK_SIZE
+            file_id, offset, first_part_cut, last_part_cut, part_count, CHUNK_SIZE
         ):
             await response.write(chunk)
     except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
@@ -451,9 +358,6 @@ async def stream_media(request: web.Request, chat_id: int, message_id: int, secu
     return response
 
 
-logger.info("WATCH_TEMPLATE_CHECK: _WATCH_PAGE exists = %s", "_WATCH_PAGE" in globals())
-
-
 async def render_watch_page(chat_id: int, message_id: int, secure_hash: str) -> str:
     streamer = get_streamer()
     file_id = await streamer.get_file_properties(chat_id, message_id)
@@ -461,8 +365,12 @@ async def render_watch_page(chat_id: int, message_id: int, secure_hash: str) -> 
     if file_id.unique_id[:6] != secure_hash:
         raise InvalidStreamHash
 
-    download_url, watch_url = build_stream_urls(chat_id, message_id, file_id.unique_id, file_id.file_name)
-    inline_url = _dl_url(chat_id, message_id, file_id.unique_id, file_id.file_name, force_download=False)
+    download_url, _watch_url = build_stream_urls(
+        chat_id, message_id, file_id.unique_id, file_id.file_name
+    )
+    inline_url = _dl_url(
+        chat_id, message_id, file_id.unique_id, file_id.file_name, force_download=False
+    )
     mime_type = file_id.mime_type or ""
     file_name = (file_id.file_name or "file").replace("_", " ")
     file_size = humanbytes(file_id.file_size)
@@ -473,6 +381,9 @@ async def render_watch_page(chat_id: int, message_id: int, secure_hash: str) -> 
         media_tag = f'<video controls playsinline preload="metadata" src="{inline_url}"></video>'
 
     return _WATCH_PAGE.format(
-        file_name=file_name, file_size=file_size, media_tag=media_tag,
-        download_url=download_url, inline_url=inline_url,
+        file_name=file_name,
+        file_size=file_size,
+        media_tag=media_tag,
+        download_url=download_url,
+        inline_url=inline_url,
     )
