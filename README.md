@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://files.catbox.moe/rgvlnf.jpg" alt="ChillFlizX Logo" width="320">
+  <img src="https://files.catbox.moe/rgvlnf.jpg" alt="ChillFlizX Logo">
 </p>
 
 <h1 align="center">🎬 ChillFlizX File Store Bot</h1>
@@ -110,7 +110,35 @@ If `URL` is empty, Railway's `RAILWAY_PUBLIC_DOMAIN` is used.
 
 </details>
 
-## 📄 About
+## 💝 Credits
 
-ChillFlizX File Store Bot is based on an open-source file store bot released under the GNU GPL v3 (see `LICENSE`).
-Selling this repo or its code for money is not allowed.
+<details>
+<summary><b>👉 Tap to see the credits</b></summary>
+
+<br>
+
+- 🎬 Built, customised and maintained for the **ChillFlizX** community
+- 🧩 Based on an open-source file store bot released under the GNU GPL v3 (see `LICENSE`)
+- ❤️ Thank you to everyone who tested, reported bugs and supported this journey
+
+</details>
+
+## 👤 About The Owner
+
+<details>
+<summary><b>👉 Tap to see the owner details</b></summary>
+
+<br>
+
+- 📢 Telegram Channel: [@ChillFlizX](https://t.me/ChillFlizX)
+- 🤖 File Store Bot: [@ChillFlizXStoreRobot](https://t.me/ChillFlizXStoreRobot)
+- 💬 Support: [@ChillFlizOwnerBot](https://t.me/ChillFlizOwnerBot)
+- 🌐 Website: [chillflizx.in](https://chillflizx.in)
+
+</details>
+
+---
+
+<p align="center">© ChillFlizX. All rights reserved.</p>
+
+<p align="center"><b>🚫 Selling this repo, or the code of this repo, for money is strictly prohibited.</b></p>
