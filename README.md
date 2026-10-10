@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="https://files.catbox.moe/yhzga3.jpg" alt="MRN-FILE-STORE-BOT Logo">
+  <img src="https://files.catbox.moe/yhzga3.jpg" alt="ChillFlizX Logo">
 </p>
 <h1 align="center">
-  MRN FILE STORE BOT
+  ChillFlizX File Store Bot
 </h1>
 
-![Typing SVG](https://readme-typing-svg.herokuapp.com/?lines=Welcome+To+MRN-FILE-STORE-BOT;A+Highly+Advance+File+Store+Bot;Made+By+Yt-@Mrn_Officialx!;Custom+Url+Shortner+Auto+Delete+Feature;A+Bot+With+Fully+Advanced+Feature!;Thank+You!)
+![Typing SVG](https://readme-typing-svg.herokuapp.com/?lines=Welcome+To+ChillFlizX+File+Store+Bot;A+Highly+Advance+File+Store+Bot;Custom+Url+Shortner+Auto+Delete+Feature;A+Bot+With+Fully+Advanced+Feature!;Thank+You!)
 </p>
 
 ## Features
@@ -75,31 +75,6 @@
 </b>
 </details>
 
-## Credit
+## About
 
-<b><details><summary>Tap On Me For See Credit</summary>
-
-💝 Credit Goes To [Mrn_Officialx](https://telegram.me/Mrn_Officialx)
-
-🖍️ This Code Is Fully Written Or Coded And Public By [Mrn_Officialx](https://telegram.me/Mrn_Officialx) So Don't Forgot To Give Credit
-
-💖 And Thank You So Much To All Who Help In This Journey 💕
-
-Copyright ©️ [Mrn_Officialx](https://telegram.me/Mrn_Officialx)
-
-</b>
-</details>
-
-## About Owner 
-
-<b><details><summary>Tap On Me For See Details Of Owner</summary>
-
-- Telegram Channel : [Mrn_Officialx](https://telegram.me/Mrn_Officialx)
-
-</b>
-</details>
-
-
-### Copyright ©️ [Mrn_Officialx](https://telegram.me/Mrn_Officialx)
-
-<b>Selling This Repo Or Code Of This Repo For Money Is Strictly Prohibited 🚫</b>
+ChillFlizX File Store Bot. Based on an open-source file store bot released under the GNU GPL v3 (see LICENSE).
