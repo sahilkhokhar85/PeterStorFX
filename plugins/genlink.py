@@ -20,12 +20,10 @@ from pyrogram.errors.exceptions.bad_request_400 import (
 from config import (
     ADMINS,
     LOG_CHANNEL,
-    PUBLIC_FILE_STORE,
     WEBSITE_URL,
     WEBSITE_URL_MODE,
 )
 
-from plugins.settings_db import get_settings
 from plugins.admins_db import is_admin
 from plugins.dbusers import db
 from TechVJ.utils.cover_copy import copy_keep_cover
@@ -207,15 +205,8 @@ async def allowed(_, __, message):
     ):
         return False
 
-    settings = await get_settings()
-    public_mode = settings.get("public_mode")
-
-    if public_mode is None:
-        public_mode = PUBLIC_FILE_STORE
-
-    if public_mode:
-        return True
-
+    # The bot is always private: only owners (ADMINS) and bot admins can
+    # generate links / use /batch.
     if message.from_user and (
         message.from_user.id in ADMINS
         or await is_admin(message.from_user.id)
