@@ -9,7 +9,7 @@ import html
 import traceback
 from datetime import datetime, timezone
 
-from pyrogram import filters, Client
+from pyrogram import filters, Client, enums
 from pyrogram.errors import FloodWait
 from pyrogram.errors.exceptions.bad_request_400 import (
     ChannelInvalid,
@@ -22,6 +22,7 @@ from config import (
     LOG_CHANNEL,
     PUBLIC_FILE_STORE,
     WEBSITE_URL,
+    WEBSITE_URL_MODE,
 )
 
 from plugins.settings_db import get_settings
@@ -29,16 +30,27 @@ from plugins.admins_db import is_admin
 from plugins.dbusers import db
 
 
+# ============================================================
+# CLOUDFLARE PERMANENT LINK WORKER
+# ============================================================
+
 PERMANENT_LINK_WORKER_URL = os.getenv("PERMANENT_LINK_WORKER_URL")
 PERMANENT_LINK_ADMIN_KEY = os.getenv("PERMANENT_LINK_ADMIN_KEY")
 
 links_col = db.db["permanent_links"]
 
+# Fetch large ranges in chunks to reduce Telegram API requests.
 BATCH_FETCH_SIZE = 200
 
 
 def bold(text):
     return f"<b>{text}</b>"
+
+
+def encode_start(value):
+    return base64.urlsafe_b64encode(
+        value.encode("ascii")
+    ).decode().rstrip("=")
 
 
 def get_media_unique_id(message):
@@ -51,15 +63,11 @@ def get_media_unique_id(message):
 
 def get_message_cache_key(message):
     unique_id = get_media_unique_id(message)
+
     if unique_id:
         return f"media:{unique_id}"
+
     return f"message:{message.chat.id}:{message.id}"
-
-
-def encode_start(value):
-    return base64.urlsafe_b64encode(
-        value.encode("ascii")
-    ).decode().rstrip("=")
 
 
 async def get_saved_link(cache_key):
@@ -68,12 +76,15 @@ async def get_saved_link(cache_key):
 
 async def save_link(cache_key, share_link, permanent_link=None):
     now = datetime.now(timezone.utc)
+
     update = {
         "$set": {
             "share_link": share_link,
             "updated_at": now,
         },
-        "$setOnInsert": {"created_at": now},
+        "$setOnInsert": {
+            "created_at": now,
+        },
     }
 
     if permanent_link:
@@ -86,7 +97,10 @@ async def save_link(cache_key, share_link, permanent_link=None):
             upsert=True,
         )
     except Exception as e:
-        print(f"LINK CACHE SAVE ERROR: {type(e).__name__}: {e}")
+        print(
+            f"LINK CACHE SAVE ERROR: "
+            f"{type(e).__name__}: {e}"
+        )
 
     return await get_saved_link(cache_key)
 
@@ -104,6 +118,7 @@ async def create_permanent_link(destination):
         f"{PERMANENT_LINK_WORKER_URL.rstrip('/')}"
         "/admin/create-link"
     )
+
     headers = {
         "Content-Type": "application/json",
         "X-Admin-Key": PERMANENT_LINK_ADMIN_KEY,
@@ -128,12 +143,19 @@ async def create_permanent_link(destination):
                 if response.status != 200:
                     return None
 
-                data = json.loads(response_text)
+                try:
+                    data = json.loads(response_text)
+                except json.JSONDecodeError:
+                    print("PERMANENT LINK ERROR: Invalid JSON")
+                    return None
 
                 if data.get("success"):
-                    return data.get("permanentUrl")
+                    permanent_url = data.get("permanentUrl")
 
-                print(f"Worker error: {data}")
+                    if permanent_url:
+                        return permanent_url
+
+                print(f"PERMANENT LINK ERROR: {data}")
 
     except Exception as e:
         print(
@@ -160,6 +182,7 @@ async def get_or_create_link(cache_key, share_link):
 
     if permanent_link:
         await save_link(cache_key, share_link, permanent_link)
+
         saved = await get_saved_link(cache_key)
 
         if saved and saved.get("permanent_url"):
@@ -168,8 +191,13 @@ async def get_or_create_link(cache_key, share_link):
         return permanent_link, share_link
 
     await save_link(cache_key, share_link)
+
     return None, share_link
 
+
+# ============================================================
+# ACCESS CONTROL
+# ============================================================
 
 async def allowed(_, __, message):
     if (
@@ -196,6 +224,10 @@ async def allowed(_, __, message):
     return False
 
 
+# ============================================================
+# LINK HELPERS
+# ============================================================
+
 def make_file_share_link(log_message_id):
     encoded = encode_start(f"file_{log_message_id}")
     return f"{WEBSITE_URL.rstrip('/')}?start={encoded}"
@@ -215,6 +247,10 @@ def reply_link_text(permanent_link, share_link):
         f"{html.escape(share_link)}</b>"
     )
 
+
+# ============================================================
+# AUTOMATIC FILE LINK GENERATION
+# ============================================================
 
 @Client.on_message(
     (filters.document | filters.video | filters.audio)
@@ -240,13 +276,18 @@ async def incoming_gen_link(bot, message):
         share_link = make_file_share_link(post.id)
 
     permanent_link, share_link = await get_or_create_link(
-        cache_key, share_link
+        cache_key,
+        share_link,
     )
 
     await message.reply(
         reply_link_text(permanent_link, share_link)
     )
 
+
+# ============================================================
+# /LINK
+# ============================================================
 
 @Client.on_message(
     filters.command(["link"]) & filters.create(allowed)
@@ -277,13 +318,18 @@ async def gen_link_s(bot, message):
         share_link = make_file_share_link(post.id)
 
     permanent_link, share_link = await get_or_create_link(
-        cache_key, share_link
+        cache_key,
+        share_link,
     )
 
     await message.reply(
         reply_link_text(permanent_link, share_link)
     )
 
+
+# ============================================================
+# BATCH HELPERS
+# ============================================================
 
 _BATCH_LINK_RE = re.compile(
     r"^(?:https?://)?"
@@ -314,6 +360,7 @@ def _extract_batch_ref(msg):
     if is_private_link:
         if not chat_name.isdigit():
             return None
+
         chat_id = int(f"-100{chat_name}")
     elif chat_name.isdigit():
         return None
@@ -324,18 +371,17 @@ def _extract_batch_ref(msg):
 
 
 async def ask_batch_reference(bot, chat_id, prompt):
+    # Exactly one prompt for each reference: FIRST and LAST.
     await bot.send_message(chat_id, bold(prompt))
 
-    answer = await bot.ask(
-        chat_id,
-        bold("Send the message link or forward the message."),
-        timeout=300,
-    )
+    # Keep the original empty prompt: it does not add a third
+    # user-facing instruction message.
+    answer = await bot.ask(chat_id, "", timeout=300)
 
     answer_text = (answer.text or "").strip()
 
     if answer_text.split(maxsplit=1)[:1] == ["/cancel"]:
-        await answer.reply(bold("❌ Batch generation cancelled."))
+        await answer.reply(bold("Cancelled."))
         return None
 
     ref = _extract_batch_ref(answer)
@@ -343,9 +389,8 @@ async def ask_batch_reference(bot, chat_id, prompt):
     if not ref:
         await answer.reply(
             bold(
-                "❌ Couldn't read the message reference. "
-                "Forward the message with its forward tag "
-                "or send its Telegram link."
+                "❌ Couldn't read that. Forward the message "
+                "with its forward tag or send its Telegram link."
             )
         )
         return None
@@ -353,23 +398,13 @@ async def ask_batch_reference(bot, chat_id, prompt):
     return ref
 
 
-async def fetch_batch_messages(bot, chat_id, first_id, last_id, status):
-    outlist = []
-    total = last_id - first_id + 1
-    processed = 0
-
-    print(
-        f"BATCH START: chat={chat_id}, first={first_id}, "
-        f"last={last_id}, total={total}"
-    )
-
-    for chunk_start in range(first_id, last_id + 1, BATCH_FETCH_SIZE):
-        chunk_end = min(
-            chunk_start + BATCH_FETCH_SIZE - 1,
-            last_id,
-        )
-        ids = list(range(chunk_start, chunk_end + 1))
-
+async def get_messages_chunk(bot, chat_id, ids):
+    """
+    Fetch a chunk. FloodWait is retried after Telegram's requested
+    delay. Other persistent errors are raised instead of silently
+    dropping the chunk and producing an incomplete batch.
+    """
+    while True:
         try:
             messages = await bot.get_messages(
                 chat_id,
@@ -380,7 +415,7 @@ async def fetch_batch_messages(bot, chat_id, first_id, last_id, status):
             if not isinstance(messages, list):
                 messages = [messages] if messages else []
 
-            by_id = {
+            return {
                 msg.id: msg
                 for msg in messages
                 if msg and getattr(msg, "id", None)
@@ -388,46 +423,49 @@ async def fetch_batch_messages(bot, chat_id, first_id, last_id, status):
 
         except FloodWait as e:
             wait_seconds = int(e.value) + 1
-            await status.edit(
-                bold(
-                    f"⏳ Telegram rate limit reached. "
-                    f"Waiting {wait_seconds} seconds..."
-                )
+
+            print(
+                f"BATCH FLOOD WAIT: {wait_seconds} seconds"
             )
+
             await asyncio.sleep(wait_seconds)
 
-            try:
-                messages = await bot.get_messages(
-                    chat_id,
-                    ids,
-                    replies=0,
-                )
-                if not isinstance(messages, list):
-                    messages = [messages] if messages else []
-                by_id = {
-                    msg.id: msg
-                    for msg in messages
-                    if msg and getattr(msg, "id", None)
-                }
-            except Exception as retry_error:
-                print(
-                    f"BATCH CHUNK ERROR {chunk_start}-{chunk_end}: "
-                    f"{type(retry_error).__name__}: {retry_error}"
-                )
-                processed += len(ids)
-                continue
 
-        except Exception as e:
-            print(
-                f"BATCH CHUNK ERROR {chunk_start}-{chunk_end}: "
-                f"{type(e).__name__}: {e}"
-            )
-            processed += len(ids)
-            continue
+async def fetch_batch_messages(
+    bot,
+    chat_id,
+    first_id,
+    last_id,
+    status,
+):
+    outlist = []
+    total = last_id - first_id + 1
+    processed = 0
+
+    print(
+        f"BATCH START: chat={chat_id}, first={first_id}, "
+        f"last={last_id}, total={total}"
+    )
+
+    for chunk_start in range(
+        first_id,
+        last_id + 1,
+        BATCH_FETCH_SIZE,
+    ):
+        chunk_end = min(
+            chunk_start + BATCH_FETCH_SIZE - 1,
+            last_id,
+        )
+
+        ids = list(range(chunk_start, chunk_end + 1))
+
+        # Do not silently skip a failed chunk.
+        by_id = await get_messages_chunk(bot, chat_id, ids)
 
         for msg_id in ids:
             msg = by_id.get(msg_id)
 
+            # Deleted or unavailable messages can legitimately be absent.
             if not msg or getattr(msg, "empty", False):
                 continue
 
@@ -456,6 +494,10 @@ async def fetch_batch_messages(bot, chat_id, first_id, last_id, status):
     return outlist
 
 
+# ============================================================
+# /BATCH
+# ============================================================
+
 @Client.on_message(
     filters.command(["batch"]) & filters.create(allowed)
 )
@@ -466,8 +508,9 @@ async def gen_link_batch(bot, message):
         first_ref = await ask_batch_reference(
             bot,
             message.chat.id,
-            "Forward the FIRST message with its forward tag, "
-            "or send its message link. Send /cancel to stop.",
+            "Forward The Batch First Message From your Batch Channel "
+            "(With Forward Tag).. or Give Me Batch First Message link "
+            "from your batch channel",
         )
 
         if first_ref is None:
@@ -478,8 +521,9 @@ async def gen_link_batch(bot, message):
         last_ref = await ask_batch_reference(
             bot,
             message.chat.id,
-            "Now forward the LAST message with its forward tag, "
-            "or send its message link. Send /cancel to stop.",
+            "Forward The Batch Last Message From Your Batch Channel "
+            "(With Forward Tag).. or Give Me Batch last message link "
+            "from your batch channel",
         )
 
         if last_ref is None:
@@ -489,7 +533,7 @@ async def gen_link_batch(bot, message):
 
         if str(first_chat_id) != str(last_chat_id):
             return await message.reply(
-                bold("❌ The first and last messages must be from the same chat.")
+                bold("Chat IDs do not match.")
             )
 
         if first_msg_id < 1 or last_msg_id < 1:
@@ -499,7 +543,10 @@ async def gen_link_batch(bot, message):
 
         if first_msg_id > last_msg_id:
             return await message.reply(
-                bold("❌ The first message ID is greater than the last message ID.")
+                bold(
+                    "❌ First message ID is greater than "
+                    "the last message ID."
+                )
             )
 
         batch_cache_key = (
@@ -518,28 +565,38 @@ async def gen_link_batch(bot, message):
 
         try:
             await bot.get_chat(first_chat_id)
+
         except ChannelInvalid:
             return await message.reply(
                 bold(
-                    "❌ Cannot access this channel. "
-                    "Check the channel ID and bot permissions."
+                    "This may be a private channel or group. "
+                    "Make sure the bot can access it."
                 )
             )
+
         except (UsernameInvalid, UsernameNotModified):
             return await message.reply(
-                bold("❌ Invalid channel username.")
+                bold("Invalid link specified.")
             )
+
         except Exception as e:
-            print(f"BATCH CHAT ACCESS ERROR: {type(e).__name__}: {e}")
+            print(
+                f"BATCH CHAT ACCESS ERROR: "
+                f"{type(e).__name__}: {e}"
+            )
+
             return await message.reply(
                 bold(
-                    "❌ Channel access failed. "
-                    "Check the channel reference and bot permissions."
+                    "❌ Channel access failed. Check the channel "
+                    "reference and bot permissions."
                 )
             )
 
         status = await message.reply(
-            bold("⏳ Starting batch generation...")
+            bold(
+                "Generating link for your messages.\n"
+                "This may take time depending on the number of messages."
+            )
         )
 
         outlist = await fetch_batch_messages(
@@ -554,7 +611,7 @@ async def gen_link_batch(bot, message):
             return await status.edit(
                 bold(
                     "❌ No messages found in this range. "
-                    "Check the message IDs and channel access."
+                    "Check the message IDs and bot's channel access."
                 )
             )
 
@@ -568,15 +625,18 @@ async def gen_link_batch(bot, message):
                 LOG_CHANNEL,
                 filename,
                 file_name="Batch.json",
-                caption=bold("⚠️ Batch generated for Filestore."),
+                caption=bold("⚠️ Batch Generated For Filestore."),
             )
+
         finally:
             if os.path.exists(filename):
                 os.remove(filename)
 
         encoded = encode_start(str(post.id))
+
         share_link = (
-            f"{WEBSITE_URL.rstrip('/')}?start=BATCH-{encoded}"
+            f"{WEBSITE_URL.rstrip('/')}"
+            f"?start=BATCH-{encoded}"
         )
 
         permanent_link, share_link = await get_or_create_link(
@@ -584,13 +644,22 @@ async def gen_link_batch(bot, message):
             share_link,
         )
 
-        await status.edit(
-            reply_link_text(permanent_link, share_link)
-            .replace(
-                "</b>",
-                f"\n\nContains {len(outlist)} messages.</b>",
+        if permanent_link:
+            final_text = (
+                "<b>⭕ Here is your link:\n\n"
+                f"Contains {len(outlist)} messages.\n\n"
+                f"🔗 Permanent link: "
+                f"{html.escape(permanent_link)}</b>"
             )
-        )
+        else:
+            final_text = (
+                "<b>⭕ Here is your link:\n\n"
+                f"Contains {len(outlist)} messages.\n\n"
+                f"🔗 Original link: "
+                f"{html.escape(share_link)}</b>"
+            )
+
+        await status.edit(final_text)
 
     except asyncio.TimeoutError:
         await message.reply(
@@ -599,6 +668,7 @@ async def gen_link_batch(bot, message):
 
     except Exception as e:
         traceback.print_exc()
+
         error_text = html.escape(
             f"{type(e).__name__}: {e}"
         )
@@ -606,7 +676,8 @@ async def gen_link_batch(bot, message):
         try:
             if status:
                 await status.edit(
-                    f"<b>❌ Batch failed:</b>\n<code>{error_text}</code>"
+                    f"<b>❌ Batch failed:</b>\n"
+                    f"<code>{error_text}</code>"
                 )
             else:
                 await message.reply(
