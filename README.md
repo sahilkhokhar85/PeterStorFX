@@ -1,80 +1,96 @@
 <p align="center">
-  <img src="https://files.catbox.moe/yhzga3.jpg" alt="ChillFlizX Logo">
-</p>
-<h1 align="center">
-  ChillFlizX File Store Bot
-</h1>
-
-![Typing SVG](https://readme-typing-svg.herokuapp.com/?lines=Welcome+To+ChillFlizX+File+Store+Bot;A+Highly+Advance+File+Store+Bot;Custom+Url+Shortner+Auto+Delete+Feature;A+Bot+With+Fully+Advanced+Feature!;Thank+You!)
+  <img src="https://files.catbox.moe/7121om.jpg" alt="ChillFlizX Logo" width="320">
 </p>
 
-## Features
+<h1 align="center">🎬 ChillFlizX File Store Bot</h1>
 
-<b><details><summary>Tap On Me For Bot Features</summary>
- 
-- [x] Permanent Link By Using Website [ Premium Feature] 
-- [x] Token Verification Feature 
-- [x] Custom Url Shortner Support Any User Can Add His Own Shortner
-- [x] Batch Support Added, Any User Can Use Batch By Making Bot Admin In His File Store Channel
-- [x] Auto Delete Feature Added
-- [x] Custom Start Message With Picture And Buttons
-- [x] Force Subscribe (Normal Mode + Join Request Mode)
-- [x] Admin Settings Panel (`/settings`) + Dynamic Admins With Permissions
-- [x] Ban / Unban Users, Bot Status, Fast Broadcast
-- [x] Fast Download / Watch Online (built-in streaming, no third-party bin channel required)
-</b>
+<p align="center">
+  <img src="https://readme-typing-svg.herokuapp.com/?lines=Welcome+To+ChillFlizX;Private+Telegram+File+Store+Bot;Permanent+Links+%7C+Force+Subscribe+%7C+Auto+Delete;Fast+Download+%26+Watch+Online&center=true&width=520" alt="Typing SVG">
+</p>
+
+---
+
+## ✨ Features
+
+<details>
+<summary><b>Tap to see bot features</b></summary>
+
+<br>
+
+- 🔒 Private bot: only owners and bot admins can create links
+- 🔗 Single file links and `/batch` links for many files
+- 🌐 Permanent links through the ChillFlizX website / Worker
+- 🖼 Video cover (thumbnail) is kept when videos are stored and delivered
+- 📢 Force Subscribe (normal mode + join request mode)
+- ♻️ Auto delete of delivered files
+- 🛡 Token verification with a URL shortener (optional)
+- ⚡ Fast Download / Watch Online, built-in streaming
+- 👥 Admin panel with permissions, ban / unban, status and broadcast
+
 </details>
 
-## Environment Variables
+## ⚙️ Environment Variables
 
-> ⚠️ `API_HASH`, `DB_URI` And `SHORTLINK_API` Have No Default Value Anymore, You Must Set Them In Your Host's Environment Variables.
+> ⚠️ `API_HASH`, `DB_URI` and `SHORTLINK_API` have no default value. Set them in your host's variables and never commit them.
 
-<b><details><summary>Tap On Me For Environment Variable</summary>
+<details>
+<summary><b>Tap to see environment variables</b></summary>
 
-- `API_ID` : Get From [my.telegram.org](https://my.telegram.org)
-- `API_HASH` : Get From [my.telegram.org](https://my.telegram.org)
-- `BOT_TOKEN` : Get From [BotFather](https://telegram.me/BotFather)
-- `BOT_USERNAME` : Your Bot Username Without @
-- `DB_URI` : Mongodb Database Url For Main Bot 
-- `DB_NAME` : Mongodb Database Name
-- `SHORTLINK_URL` : Verify Shortener Domain Without https:// [Only If VERIFY_MODE Is True]
-- `SHORTLINK_API` : Verify Shortener API Key [Only If VERIFY_MODE Is True]
-- `VERIFY_MODE` : `True` Or `False` (Token Verification)
-- `WEBSITE_URL_MODE` : `True` Or `False` (Permanent Link By Website)
-- `WEBSITE_URL` : Your Redirect Website Url [Only If WEBSITE_URL_MODE Is True]
-- `STREAM_MODE` : `True` Or `False` (Fast Download / Watch Online buttons on delivered files)
-- `ADMINS` : It mean Admin/Owner Id For Broadcasting Message.
-- `LOG_CHANNEL` : Log channel id start with -100xxxxxx
-- `URL` : Your Server App Link With https:// and in last make sure one / is given. [Also Used For Fast Download / Watch Online Links]
-- `AUTO_DELETE` : Time In Minutes
-- `AUTO_DELETE_TIME` : Time In Seconds
-- `PYTHON_VERSION` : This Variable Is Only For Render, Value IS `3.10.8`
-- `PORT` : This Variable Is Only For Render, Value IS `8080`
-</b>
+<br>
+
+**Required**
+
+| Variable | What it is |
+|---|---|
+| `API_ID`, `API_HASH` | From [my.telegram.org](https://my.telegram.org) |
+| `BOT_TOKEN` | From [BotFather](https://t.me/BotFather) |
+| `BOT_USERNAME` | Bot username without @ |
+| `DB_URI`, `DB_NAME` | MongoDB connection string and database name |
+| `ADMINS` | Owner user ids, space separated |
+| `LOG_CHANNEL` | Storage / log channel id, like `-100xxxxxxxxxx` |
+| `WEBSITE_URL` | Website / Worker URL used for permanent links |
+| `URL` | This bot's public server URL, with `https://` and a trailing `/` |
+
+**Optional**
+
+| Variable | What it is |
+|---|---|
+| `STREAM_MODE` | `True` / `False`: Fast Download / Watch Online buttons |
+| `AUTO_DELETE_MODE` | `True` / `False`: auto delete delivered files |
+| `AUTO_DELETE_TIME` | Delete delay in seconds (default `1800`) |
+| `CUSTOM_FILE_CAPTION`, `BATCH_FILE_CAPTION` | Caption templates |
+| `VERIFY_MODE` | `True` / `False`: token verification |
+| `SHORTLINK_URL`, `SHORTLINK_API` | Shortener domain (no `https://`) and API key, only when `VERIFY_MODE` is `True` |
+| `VERIFY_TUTORIAL` | Verification tutorial link |
+| `PING_INTERVAL` | Keep-alive ping interval in seconds (default `1200`) |
+| `PORT` | Web server port (default `8080`) |
+
+If `URL` is empty, `RAILWAY_PUBLIC_DOMAIN` is used.
+
 </details>
 
+## 🤖 Commands
 
-## Command To Use Bot
+<details>
+<summary><b>Tap to see bot commands</b></summary>
 
-<b><details><summary>Tap On Me For Bot Commands</summary>
+<br>
 
-🖍️ Main Bot Commands :-
+| Command | What it does |
+|---|---|
+| `/start` | Check the bot is alive / open a file link |
+| `/link` | Reply to a file to get its shareable link |
+| `/batch` | Link for many files (bot admins only) |
+| `/base_site` `/api` | Set your own shortener domain and API key |
+| `/broadcast` | Message all users (owner only, reply to a message) |
+| `/ban` `/unban` | Ban or unban a user (user id, or reply) |
+| `/status` | Users, banned users, CPU, RAM and uptime |
+| `/settings` | Admin panel: Force Subscribe, Admins, Status, Restart |
+| `/delreq` | Clear recorded join requests |
+| `/restart` | Restart the bot |
 
-- `/start` : By This Command You Can Check Bot Is Alive Or Not
-- `/link` : By This Command You Can Generate A Shareable Link Of File By Replying This Command To That File
-- `/batch` : By This Command You Can Generate Multiple File Shareable Link At A Time [Use Like This /batch (first post link) (last post link)]
-- `/base_site` : By This Command You Can Set Your Url Shortner Domain [Use Like This /base_site domain.com]
-- `/api` : By This Command You Can Set Your Url Shortner Api [Use Like This /api (your api key)]
-- `/broadcast` : By Using This Command You Can Broadcast A Message To Your Bot User, Reply This Command To Broadcast Message [Owner Only Command]
-- `/ban` `/unban` : Ban Or Unban A User [Use Like This /ban (user id) Or Reply To The User]
-- `/status` : Users, Banned Users, CPU, RAM And Uptime
-- `/settings` : Admin Settings Panel (Force Sub, Protect Content, Auto Delete, Caption, Start Message, Admins, Bot Mode)
-- `/delreq` : Clear All Recorded Join Requests
-- `/restart` : Restart The Bot
-
-</b>
 </details>
 
-## About
+## 📄 About
 
-ChillFlizX File Store Bot. Based on an open-source file store bot released under the GNU GPL v3 (see LICENSE).
+ChillFlizX File Store Bot is based on an open-source file store bot released under the GNU GPL v3 (see `LICENSE`).
