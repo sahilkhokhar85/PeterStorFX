@@ -3,7 +3,7 @@
 
 import datetime
 import motor.motor_asyncio
-from config import DB_URI, DB_NAME
+from config import DB_URI, DB_NAME, AUTO_DELETE_MODE, AUTO_DELETE_TIME
 
 _client = motor.motor_asyncio.AsyncIOMotorClient(
     DB_URI,
@@ -40,12 +40,27 @@ DEFAULTS = {
 }
 
 
+def _apply_code_controlled(doc):
+    """These options are no longer editable from the /settings panel. They are
+    fixed here / in config.py, whatever an older value saved in MongoDB says."""
+    doc = dict(doc)
+    doc["start_message"] = None          # -> Script.script.START_TXT
+    doc["start_photo"] = None            # -> random pic from config.PICS
+    doc["custom_caption"] = None         # -> config CUSTOM_FILE_CAPTION / BATCH_FILE_CAPTION
+    doc["custom_buttons"] = []           # no extra buttons
+    doc["protect_content"] = False       # never protect content
+    doc["auto_delete"] = AUTO_DELETE_MODE        # env AUTO_DELETE_MODE
+    doc["auto_delete_time"] = AUTO_DELETE_TIME   # env AUTO_DELETE_TIME (seconds)
+    doc["public_mode"] = False           # bot is always private
+    return doc
+
+
 async def get_settings():
     doc = await _col.find_one({"_id": "settings"})
     if not doc:
         doc = DEFAULTS.copy()
         await _col.insert_one(doc)
-        return doc
+        return _apply_code_controlled(doc)
     changed = False
     for k, v in DEFAULTS.items():
         if k not in doc:
@@ -53,7 +68,7 @@ async def get_settings():
             changed = True
     if changed:
         await _col.update_one({"_id": "settings"}, {"$set": doc}, upsert=True)
-    return doc
+    return _apply_code_controlled(doc)
 
 
 async def update_setting(key, value):
