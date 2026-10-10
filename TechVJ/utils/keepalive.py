@@ -6,6 +6,9 @@ from config import PING_INTERVAL, URL
 
 
 async def ping_server():
+    if not URL:
+        logging.warning("URL env is empty - keep-alive ping disabled.")
+        return
     sleep_time = PING_INTERVAL
     while True:
         await asyncio.sleep(sleep_time)
