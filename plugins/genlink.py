@@ -411,7 +411,7 @@ async def gen_link_batch(bot, message):
     async for msg in bot.iter_messages(
         f_chat_id,
         limit=total,
-        offset_id=l_msg_id + 1,
+        offset_id=l_msg_id - 1,
         reverse=True,
     ):
         if msg.empty or msg.service:
