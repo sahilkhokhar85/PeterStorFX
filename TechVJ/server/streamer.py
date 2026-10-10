@@ -29,6 +29,7 @@ import logging
 import math
 import mimetypes
 import urllib.parse
+import asyncio
 from typing import Any, Dict, Optional, Tuple
 
 from aiohttp import web
@@ -234,7 +235,8 @@ def get_streamer() -> ByteStreamer:
     return _streamer
 
 
-async def stream_media(request: web.Request, chat_id: int, message_id: int, secure_hash: str) -> web.Response:
+
+async def stream_media(request: web.Request, chat_id: int, message_id: int, secure_hash: str) -> web.StreamResponse:
     streamer = get_streamer()
     file_id = await streamer.get_file_properties(chat_id, message_id)
 
@@ -242,116 +244,88 @@ async def stream_media(request: web.Request, chat_id: int, message_id: int, secu
         raise InvalidStreamHash
 
     file_size = file_id.file_size
+    if not file_size:
+        raise StreamFileNotFound
+
     range_header = request.headers.get("Range")
+    start = 0
+    end = file_size - 1
+
     if range_header:
-        from_bytes, _, until_bytes = range_header.replace("bytes=", "").partition("-")
-        from_bytes = int(from_bytes) if from_bytes else 0
-        until_bytes = int(until_bytes) if until_bytes else file_size - 1
-    else:
-        from_bytes = 0
-        until_bytes = file_size - 1
+        try:
+            unit, _, value = range_header.partition("=")
+            if unit.strip() != "bytes":
+                raise ValueError
 
-    if (until_bytes >= file_size) or (from_bytes < 0) or (until_bytes < from_bytes):
-        return web.Response(
-            status=416, body=b"416: Range not satisfiable",
-            headers={"Content-Range": f"bytes */{file_size}"},
-        )
+            first, _, last = value.partition("-")
+            if not first:
+                suffix_length = int(last)
+                if suffix_length <= 0:
+                    raise ValueError
+                start = max(0, file_size - suffix_length)
+            else:
+                start = int(first)
+                end = int(last) if last else file_size - 1
 
-    until_bytes = min(until_bytes, file_size - 1)
-    offset = from_bytes - (from_bytes % CHUNK_SIZE)
-    first_part_cut = from_bytes - offset
-    last_part_cut = until_bytes % CHUNK_SIZE + 1
-    req_length = until_bytes - from_bytes + 1
-    part_count = math.ceil(until_bytes / CHUNK_SIZE) - math.floor(offset / CHUNK_SIZE)
+            if start < 0 or start >= file_size or end < start:
+                raise ValueError
 
-    body = streamer.yield_file(file_id, offset, first_part_cut, last_part_cut, part_count, CHUNK_SIZE)
+            end = min(end, file_size - 1)
+        except (ValueError, TypeError):
+            return web.Response(
+                status=416,
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
 
-    mime_type = file_id.mime_type or (mimetypes.guess_type(file_id.file_name or "")[0]) or "application/octet-stream"
-    file_name = file_id.file_name or "file"
-    disposition = "attachment" if request.rel_url.query.get("dl") == "1" else "inline"
+    length = end - start + 1
+    headers = {
+        "Content-Type": (
+            file_id.mime_type
+            or mimetypes.guess_type(file_id.file_name or "")[0]
+            or "application/octet-stream"
+        ),
+        "Content-Length": str(length),
+        "Content-Disposition": (
+            'attachment' if request.rel_url.query.get("dl") == "1" else 'inline'
+        ) + f'; filename="{(file_id.file_name or "file").replace(chr(34), "")}"',
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-cache",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
+    }
 
-    return web.Response(
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+
+    response = web.StreamResponse(
         status=206 if range_header else 200,
-        body=body,
-        headers={
-            "Content-Type": mime_type,
-            "Content-Range": f"bytes {from_bytes}-{until_bytes}/{file_size}",
-            "Content-Length": str(req_length),
-            "Content-Disposition": f'{disposition}; filename="{file_name}"',
-            "Accept-Ranges": "bytes",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-            "Access-Control-Allow-Headers": "Range, Content-Type",
-            "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
-        },
+        headers=headers,
     )
 
+    await response.prepare(request)
 
-_WATCH_PAGE = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>{file_name} | Mrn Officialx</title>
-<style>
-  :root {{
-    --bg: #05070d; --panel: rgba(20,24,38,.75); --border: rgba(255,255,255,.08);
-    --text: #f4f6fb; --muted: #98a2b8; --gold: #f5c453; --rose: #f43f5e;
-  }}
-  * {{ box-sizing: border-box; }}
-  body {{
-    margin: 0; min-height: 100vh; font-family: 'Segoe UI', Roboto, Arial, sans-serif;
-    background: radial-gradient(circle at top, #131a2c, var(--bg) 65%);
-    color: var(--text); display: flex; flex-direction: column; align-items: center;
-    padding: 24px 14px 48px;
-  }}
-  .brand {{
-    font-weight: 800; letter-spacing: .5px; margin-bottom: 18px; font-size: 1.15rem;
-    background: linear-gradient(120deg, var(--gold), var(--rose));
-    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
-  }}
-  .card {{
-    width: 100%; max-width: 780px; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 16px; overflow: hidden; backdrop-filter: blur(10px);
-  }}
-  video, audio {{ width: 100%; display: block; background: #000; }}
-  audio {{ padding: 28px 16px; }}
-  .info {{ padding: 18px 20px 6px; }}
-  .title {{ font-size: 1.02rem; font-weight: 600; word-break: break-word; }}
-  .meta {{ margin-top: 4px; color: var(--muted); font-size: .85rem; }}
-  .actions {{ display: flex; flex-wrap: wrap; gap: 10px; padding: 16px 20px 22px; }}
-  .btn {{
-    flex: 1 1 150px; text-align: center; text-decoration: none; padding: 12px 14px;
-    border-radius: 10px; font-weight: 600; font-size: .9rem; border: 1px solid var(--border);
-    color: var(--text); background: rgba(255,255,255,.04); transition: transform .15s ease;
-  }}
-  .btn:active {{ transform: scale(.97); }}
-  .btn.primary {{ background: linear-gradient(120deg, var(--gold), var(--rose)); color: #10131d; border: none; }}
-  .players {{ padding: 0 20px 26px; color: var(--muted); font-size: .82rem; }}
-  .players a {{ color: var(--gold); text-decoration: none; margin-right: 12px; }}
-</style>
-</head>
-<body>
-  <div class="brand">⚡ Mrn Officialx</div>
-  <div class="card">
-    {media_tag}
-    <div class="info">
-      <div class="title">{file_name}</div>
-      <div class="meta">{file_size}</div>
-    </div>
-    <div class="actions">
-      <a class="btn primary" href="{download_url}">🚀 Fast Download</a>
-      <a class="btn" href="{inline_url}" target="_blank" rel="noopener">🔗 Direct Stream Link</a>
-    </div>
-    <div class="players">
-      Open externally:
-      <a href="intent:{inline_url}#Intent;action=android.intent.action.VIEW;type=video/*;package=com.mxtech.videoplayer.ad;end">MX Player</a>
-      <a href="intent:{inline_url}#Intent;action=android.intent.action.VIEW;type=video/*;package=org.videolan.vlc;end">VLC</a>
-      <a href="playit://playerv2/video?url={inline_url}">PLAYit</a>
-    </div>
-  </div>
-</body>
-</html>"""
+    if request.method == "HEAD":
+        return response
+
+    offset = start - (start % CHUNK_SIZE)
+    first_part_cut = start - offset
+    last_part_cut = end - offset + 1
+    part_count = math.ceil((end + 1) / CHUNK_SIZE) - math.floor(offset / CHUNK_SIZE)
+
+    try:
+        async for chunk in streamer.yield_file(
+            file_id, offset, first_part_cut, last_part_cut,
+            part_count, CHUNK_SIZE
+        ):
+            await response.write(chunk)
+    except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
+        raise
+    except Exception:
+        logger.exception("Error while streaming media")
+        raise
+
+    await response.write_eof()
+    return response
 
 
 async def render_watch_page(chat_id: int, message_id: int, secure_hash: str) -> str:
