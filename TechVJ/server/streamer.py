@@ -235,6 +235,129 @@ def get_streamer() -> ByteStreamer:
     return _streamer
 
 
+_WATCH_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>{file_name} | Mrn Officialx</title>
+<style>
+  :root {{
+    --bg: #05070d;
+    --panel: rgba(20,24,38,.75);
+    --border: rgba(255,255,255,.08);
+    --text: #f4f6fb;
+    --muted: #98a2b8;
+    --gold: #f5c453;
+    --rose: #f43f5e;
+  }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    margin: 0;
+    min-height: 100vh;
+    font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+    background: radial-gradient(circle at top, #131a2c, var(--bg) 65%);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 14px 48px;
+  }}
+  .brand {{
+    font-weight: 800;
+    letter-spacing: .5px;
+    margin-bottom: 18px;
+    font-size: 1.15rem;
+    background: linear-gradient(120deg, var(--gold), var(--rose));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }}
+  .card {{
+    width: 100%;
+    max-width: 780px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    backdrop-filter: blur(10px);
+  }}
+  video, audio {{
+    width: 100%;
+    display: block;
+    background: #000;
+  }}
+  audio {{ padding: 28px 16px; }}
+  .info {{ padding: 18px 20px 6px; }}
+  .title {{
+    font-size: 1.02rem;
+    font-weight: 600;
+    word-break: break-word;
+  }}
+  .meta {{
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: .85rem;
+  }}
+  .actions {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 16px 20px 22px;
+  }}
+  .btn {{
+    flex: 1 1 150px;
+    text-align: center;
+    text-decoration: none;
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: .9rem;
+    border: 1px solid var(--border);
+    color: var(--text);
+    background: rgba(255,255,255,.04);
+    transition: transform .15s ease;
+  }}
+  .btn:active {{ transform: scale(.97); }}
+  .btn.primary {{
+    background: linear-gradient(120deg, var(--gold), var(--rose));
+    color: #10131d;
+    border: none;
+  }}
+  .players {{
+    padding: 0 20px 26px;
+    color: var(--muted);
+    font-size: .82rem;
+  }}
+  .players a {{
+    color: var(--gold);
+    text-decoration: none;
+    margin-right: 12px;
+  }}
+</style>
+</head>
+<body>
+  <div class="brand">⚡ Mrn Officialx</div>
+  <div class="card">
+    {media_tag}
+    <div class="info">
+      <div class="title">{file_name}</div>
+      <div class="meta">{file_size}</div>
+    </div>
+    <div class="actions">
+      <a class="btn primary" href="{download_url}">🚀 Fast Download</a>
+      <a class="btn" href="{inline_url}" target="_blank" rel="noopener">🔗 Direct Stream Link</a>
+    </div>
+    <div class="players">
+      Open externally:
+      <a href="intent:{inline_url}#Intent;action=android.intent.action.VIEW;type=video/*;package=com.mxtech.videoplayer.ad;end">MX Player</a>
+      <a href="intent:{inline_url}#Intent;action=android.intent.action.VIEW;type=video/*;package=org.videolan.vlc;end">VLC</a>
+      <a href="playit://playerv2/video?url={inline_url}">PLAYit</a>
+    </div>
+  </div>
+</body>
+</html>"""
+
 
 async def stream_media(request: web.Request, chat_id: int, message_id: int, secure_hash: str) -> web.StreamResponse:
     streamer = get_streamer()
