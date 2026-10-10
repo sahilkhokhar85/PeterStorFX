@@ -328,6 +328,9 @@ async def stream_media(request: web.Request, chat_id: int, message_id: int, secu
     return response
 
 
+logger.info("WATCH_TEMPLATE_CHECK: _WATCH_PAGE exists = %s", "_WATCH_PAGE" in globals())
+
+
 async def render_watch_page(chat_id: int, message_id: int, secure_hash: str) -> str:
     streamer = get_streamer()
     file_id = await streamer.get_file_properties(chat_id, message_id)
