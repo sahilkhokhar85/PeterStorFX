@@ -1,5 +1,5 @@
 # Ban / Unban / Bot Status commands
-# Added for MRN Store TV bot
+# Added for the ChillFlizX bot
 
 import time
 import os
