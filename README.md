@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://files.catbox.moe/itbu8x.jpg" alt="ChillFlizX Logo" width="320">
+  <img src="https://files.catbox.moe/rgvlnf.jpg" alt="ChillFlizX Logo" width="320">
 </p>
 
 <h1 align="center">🎬 ChillFlizX File Store Bot</h1>
