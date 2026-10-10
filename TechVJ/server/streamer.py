@@ -100,20 +100,27 @@ class ByteStreamer:
             return cached
         return await self._generate_file_properties(chat_id, message_id)
 
+    
     async def _generate_file_properties(self, chat_id: int, message_id: int) -> FileId:
+        key = (chat_id, message_id)
+
         message = await self.client.get_messages(chat_id, message_id)
         if not message or message.empty:
             raise StreamFileNotFound
+
         media = get_media_from_message(message)
         if not media:
             raise StreamFileNotFound
+
         file_id = FileId.decode(media.file_id)
         file_id.file_size = getattr(media, "file_size", 0) or 0
         file_id.mime_type = getattr(media, "mime_type", "") or ""
         file_id.file_name = getattr(media, "file_name", "") or ""
         file_id.unique_id = getattr(media, "file_unique_id", "") or ""
+
         self.cached_file_ids[key] = file_id
         return file_id
+
 
     async def generate_media_session(self, file_id: FileId) -> Session:
         client = self.client
