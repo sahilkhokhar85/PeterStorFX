@@ -230,7 +230,7 @@ _WATCH_PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>{file_name} | Mrn Officialx</title>
+<title>{file_name} | ChillFlizX</title>
 <style>
   :root {{
     --bg: #05070d; --panel: rgba(20,24,38,.75); --border: rgba(255,255,255,.08);
@@ -270,7 +270,7 @@ _WATCH_PAGE = """<!DOCTYPE html>
 </style>
 </head>
 <body>
-  <div class="brand">⚡ Mrn Officialx</div>
+  <div class="brand">⚡ ChillFlizX</div>
   <div class="card">
     {media_tag}
     <div class="info">
