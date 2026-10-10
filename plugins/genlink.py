@@ -1,14 +1,16 @@
+
 import re
 import os
 import json
 import base64
 import aiohttp
+from datetime import datetime, timezone
 
-from pyrogram import filters, Client, enums
+from pyrogram import filters, Client
 from pyrogram.errors.exceptions.bad_request_400 import (
     ChannelInvalid,
     UsernameInvalid,
-    UsernameNotModified
+    UsernameNotModified,
 )
 
 from config import (
@@ -16,7 +18,6 @@ from config import (
     LOG_CHANNEL,
     PUBLIC_FILE_STORE,
     WEBSITE_URL,
-    WEBSITE_URL_MODE
 )
 
 from plugins.settings_db import get_settings
@@ -24,54 +25,101 @@ from plugins.admins_db import is_admin
 from plugins.dbusers import db
 
 
-# ============================================================
-# CLOUDFLARE PERMANENT LINK WORKER
-# ============================================================
-
 PERMANENT_LINK_WORKER_URL = os.getenv("PERMANENT_LINK_WORKER_URL")
 PERMANENT_LINK_ADMIN_KEY = os.getenv("PERMANENT_LINK_ADMIN_KEY")
 
+# MongoDB collection for saved links
+links_col = db.db["permanent_links"]
+
+
+def get_media_unique_id(message):
+    """Return a stable Telegram media ID when available."""
+    for media_type in ("document", "video", "audio"):
+        media = getattr(message, media_type, None)
+        if media and media.file_unique_id:
+            return media.file_unique_id
+    return None
+
+
+def get_message_cache_key(message):
+    unique_id = get_media_unique_id(message)
+    if unique_id:
+        return f"media:{unique_id}"
+
+    return f"message:{message.chat.id}:{message.id}"
+
+
+def encode_start(value):
+    return base64.urlsafe_b64encode(
+        value.encode("ascii")
+    ).decode().rstrip("=")
+
+
+async def get_saved_link(cache_key):
+    return await links_col.find_one({"_id": cache_key})
+
+
+async def save_link(cache_key, share_link, permanent_link=None):
+    """Save a link without replacing an existing permanent URL."""
+    now = datetime.now(timezone.utc)
+
+    update = {
+        "$set": {
+            "share_link": share_link,
+            "updated_at": now,
+        },
+        "$setOnInsert": {
+            "created_at": now,
+        },
+    }
+
+    if permanent_link:
+        update["$set"]["permanent_url"] = permanent_link
+
+    try:
+        await links_col.update_one(
+            {"_id": cache_key},
+            update,
+            upsert=True,
+        )
+    except Exception as e:
+        # A concurrent request may have inserted the same _id.
+        print(f"LINK CACHE SAVE ERROR: {type(e).__name__}: {e}")
+
+    return await get_saved_link(cache_key)
+
 
 async def create_permanent_link(destination):
-    """
-    Sends the original File Store URL to the Cloudflare Worker.
-    Worker creates the current shortener URL internally and returns
-    a permanent Worker URL.
-    """
-
     if not PERMANENT_LINK_WORKER_URL:
-        print("PERMANENT LINK ERROR: PERMANENT_LINK_WORKER_URL is missing")
+        print("PERMANENT LINK ERROR: Worker URL is missing")
         return None
 
     if not PERMANENT_LINK_ADMIN_KEY:
-        print("PERMANENT LINK ERROR: PERMANENT_LINK_ADMIN_KEY is missing")
+        print("PERMANENT LINK ERROR: Admin key is missing")
         return None
 
-    api_url = f"{PERMANENT_LINK_WORKER_URL.rstrip('/')}/admin/create-link"
-
-    payload = {
-        "destination": destination
-    }
-
+    api_url = (
+        f"{PERMANENT_LINK_WORKER_URL.rstrip('/')}"
+        "/admin/create-link"
+    )
     headers = {
         "Content-Type": "application/json",
-        "X-Admin-Key": PERMANENT_LINK_ADMIN_KEY
+        "X-Admin-Key": PERMANENT_LINK_ADMIN_KEY,
     }
 
     try:
-        timeout = aiohttp.ClientTimeout(total=20)
+        timeout = aiohttp.ClientTimeout(total=30)
 
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
                 api_url,
-                json=payload,
-                headers=headers
+                json={"destination": destination},
+                headers=headers,
             ) as response:
-
                 response_text = await response.text()
 
                 print(
-                    f"PERMANENT LINK WORKER RESPONSE: "
+                    "PERMANENT LINK WORKER RESPONSE: "
                     f"HTTP {response.status} | {response_text}"
                 )
 
@@ -81,41 +129,56 @@ async def create_permanent_link(destination):
                 try:
                     data = json.loads(response_text)
                 except json.JSONDecodeError:
-                    print("PERMANENT LINK ERROR: Worker returned invalid JSON")
+                    print("Worker returned invalid JSON")
                     return None
 
                 if data.get("success"):
-                    permanent_url = data.get("permanentUrl")
+                    return data.get("permanentUrl")
 
-                    if permanent_url:
-                        print(
-                            f"PERMANENT LINK CREATED: {permanent_url}"
-                        )
-                        return permanent_url
-
-                print(
-                    f"PERMANENT LINK ERROR: Unexpected Worker response: {data}"
-                )
+                print(f"Worker error: {data}")
 
     except Exception as e:
         print(
-            f"PERMANENT LINK REQUEST ERROR: "
+            "PERMANENT LINK REQUEST ERROR: "
             f"{type(e).__name__}: {e}"
         )
 
     return None
 
-# ============================================================
-# ACCESS CONTROL
-# ============================================================
+
+async def get_or_create_link(cache_key, share_link):
+    """
+    Return a cached permanent link when available.
+    Otherwise ask the Worker to create or find one.
+    """
+    saved = await get_saved_link(cache_key)
+
+    if saved and saved.get("permanent_url"):
+        return saved["permanent_url"], saved.get("share_link", share_link)
+
+    if saved and saved.get("share_link"):
+        share_link = saved["share_link"]
+
+    permanent_link = await create_permanent_link(share_link)
+
+    if permanent_link:
+        await save_link(cache_key, share_link, permanent_link)
+        saved = await get_saved_link(cache_key)
+
+        if saved and saved.get("permanent_url"):
+            return saved["permanent_url"], share_link
+
+        return permanent_link, share_link
+
+    await save_link(cache_key, share_link)
+    return None, share_link
+
 
 async def allowed(_, __, message):
-    # banned users must not be able to generate links / use /batch either
     if message.from_user and await db.is_user_banned(message.from_user.id):
         return False
 
     settings = await get_settings()
-
     public_mode = settings.get("public_mode")
 
     if public_mode is None:
@@ -133,9 +196,23 @@ async def allowed(_, __, message):
     return False
 
 
-# ============================================================
-# AUTOMATIC FILE LINK GENERATION
-# ============================================================
+def make_file_share_link(log_message_id):
+    encoded = encode_start(f"file_{log_message_id}")
+    return f"{WEBSITE_URL.rstrip('/')}?start={encoded}"
+
+
+def reply_link_text(permanent_link, share_link):
+    if permanent_link:
+        return (
+            "<b>⭕ ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ:\n\n"
+            f"🔗 ᴘᴇʀᴍᴀɴᴇɴᴛ ʟɪɴᴋ :- {permanent_link}</b>"
+        )
+
+    return (
+        "<b>⭕ ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ:\n\n"
+        f"🔗 ᴏʀɪɢɪɴᴀʟ ʟɪɴᴋ :- {share_link}</b>"
+    )
+
 
 @Client.on_message(
     (filters.document | filters.video | filters.audio)
@@ -143,43 +220,36 @@ async def allowed(_, __, message):
     & filters.create(allowed)
 )
 async def incoming_gen_link(bot, message):
+    cache_key = get_message_cache_key(message)
+    saved = await get_saved_link(cache_key)
 
-    post = await message.copy(LOG_CHANNEL)
-
-    file_id = str(post.id)
-
-    string = "file_" + file_id
-
-    outstr = base64.urlsafe_b64encode(
-        string.encode("ascii")
-    ).decode().strip("=")
-
-    share_link = f"{WEBSITE_URL.rstrip('/')}?start={outstr}"
-
-    permanent_link = await create_permanent_link(share_link)
-
-    if permanent_link:
-        await message.reply(
-            f"<b>⭕ ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ:\n\n"
-            f"🔗 ᴘᴇʀᴍᴀɴᴇɴᴛ ʟɪɴᴋ :- {permanent_link}</b>"
+    if saved and saved.get("permanent_url"):
+        return await message.reply(
+            reply_link_text(
+                saved["permanent_url"],
+                saved.get("share_link", ""),
+            )
         )
+
+    # Reuse the original log-channel destination if it was already saved.
+    if saved and saved.get("share_link"):
+        share_link = saved["share_link"]
     else:
-        await message.reply(
-            f"<b>⭕ ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ:\n\n"
-            f"🔗 ᴏʀɪɢɪɴᴀʟ ʟɪɴᴋ :- {share_link}</b>"
-        )
+        post = await message.copy(LOG_CHANNEL)
+        share_link = make_file_share_link(post.id)
 
+    permanent_link, share_link = await get_or_create_link(
+        cache_key,
+        share_link,
+    )
 
-# ============================================================
-# /LINK
-# ============================================================
+    await message.reply(reply_link_text(permanent_link, share_link))
+
 
 @Client.on_message(
-    filters.command(["link"])
-    & filters.create(allowed)
+    filters.command(["link"]) & filters.create(allowed)
 )
 async def gen_link_s(bot, message):
-
     replied = message.reply_to_message
 
     if not replied:
@@ -187,35 +257,30 @@ async def gen_link_s(bot, message):
             "Reply to a message to get a shareable link."
         )
 
-    post = await replied.copy(LOG_CHANNEL)
+    cache_key = get_message_cache_key(replied)
+    saved = await get_saved_link(cache_key)
 
-    file_id = str(post.id)
-
-    string = "file_" + file_id
-
-    outstr = base64.urlsafe_b64encode(
-        string.encode("ascii")
-    ).decode().strip("=")
-
-    share_link = f"{WEBSITE_URL.rstrip('/')}?start={outstr}"
-
-    permanent_link = await create_permanent_link(share_link)
-
-    if permanent_link:
-        await message.reply(
-            f"<b>⭕ ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ:\n\n"
-            f"🔗 ᴘᴇʀᴍᴀɴᴇɴᴛ ʟɪɴᴋ :- {permanent_link}</b>"
+    if saved and saved.get("permanent_url"):
+        return await message.reply(
+            reply_link_text(
+                saved["permanent_url"],
+                saved.get("share_link", ""),
+            )
         )
+
+    if saved and saved.get("share_link"):
+        share_link = saved["share_link"]
     else:
-        await message.reply(
-            f"<b>⭕ ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ:\n\n"
-            f"🔗 ᴏʀɪɢɪɴᴀʟ ʟɪɴᴋ :- {share_link}</b>"
-        )
+        post = await replied.copy(LOG_CHANNEL)
+        share_link = make_file_share_link(post.id)
 
+    permanent_link, share_link = await get_or_create_link(
+        cache_key,
+        share_link,
+    )
 
-# ============================================================
-# BATCH HELPERS
-# ============================================================
+    await message.reply(reply_link_text(permanent_link, share_link))
+
 
 _BATCH_LINK_RE = re.compile(
     r"(https://)?"
@@ -227,15 +292,10 @@ _BATCH_LINK_RE = re.compile(
 
 
 def _extract_batch_ref(msg):
-    """
-    Pull (chat_id, message_id) either from a forwarded channel post
-    or from a t.me link.
-    """
-
     if msg.forward_from_chat and msg.forward_from_message_id:
         return (
             msg.forward_from_chat.id,
-            msg.forward_from_message_id
+            msg.forward_from_message_id,
         )
 
     text = (msg.text or "").strip()
@@ -255,16 +315,10 @@ def _extract_batch_ref(msg):
     return None
 
 
-# ============================================================
-# /BATCH
-# ============================================================
-
 @Client.on_message(
-    filters.command(["batch"])
-    & filters.create(allowed)
+    filters.command(["batch"]) & filters.create(allowed)
 )
 async def gen_link_batch(bot, message):
-
     await message.reply(
         "<b>Forward The Batch First Message From your Batch Channel "
         "(With Forward Tag).. or Give Me Batch First Message link "
@@ -301,128 +355,125 @@ async def gen_link_batch(bot, message):
 
     if not ref2:
         return await ans2.reply(
-            "<b>❌ Couldn't read that. Forward the last message "
+            "<b>❌ Couldn't read the last message. Forward it "
             "(with forward tag) or send its link, then run /batch again.</b>"
         )
 
     l_chat_id, l_msg_id = ref2
 
-    message = ans2
-
     if str(f_chat_id) != str(l_chat_id):
-        return await message.reply("Chat ids not matched.")
+        return await ans2.reply("Chat ids not matched.")
+
+    batch_cache_key = (
+        f"batch:{f_chat_id}:{f_msg_id}:{l_msg_id}"
+    )
+
+    saved = await get_saved_link(batch_cache_key)
+
+    if saved and saved.get("permanent_url"):
+        return await ans2.reply(
+            reply_link_text(
+                saved["permanent_url"],
+                saved.get("share_link", ""),
+            )
+        )
 
     try:
-        chat_id = (await bot.get_chat(f_chat_id)).id
-
+        await bot.get_chat(f_chat_id)
     except ChannelInvalid:
-        return await message.reply(
+        return await ans2.reply(
             "This may be a private channel / group. "
             "Make me an admin over there to index the files."
         )
-
     except (UsernameInvalid, UsernameNotModified):
-        return await message.reply(
-            "Invalid Link specified."
-        )
-
+        return await ans2.reply("Invalid Link specified.")
     except Exception as e:
-        return await message.reply(
-            f"Errors - {e}"
-        )
+        return await ans2.reply(f"Errors - {e}")
 
-    sts = await message.reply(
+    sts = await ans2.reply(
         "**ɢᴇɴᴇʀᴀᴛɪɴɢ ʟɪɴᴋ ғᴏʀ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ**.\n"
         "**ᴛʜɪs ᴍᴀʏ ᴛᴀᴋᴇ ᴛɪᴍᴇ ᴅᴇᴘᴇɴᴅɪɴɢ ᴜᴘᴏɴ "
         "ɴᴜᴍʙᴇʀ ᴏғ ᴍᴇssᴀɢᴇs**"
     )
 
-    FRMT = (
+    status_format = (
         "**ɢᴇɴᴇʀᴀᴛɪɴɢ ʟɪɴᴋ...**\n"
         "**ᴛᴏᴛᴀʟ ᴍᴇssᴀɢᴇs:** {total}\n"
         "**ᴅᴏɴᴇ:** {current}\n"
         "**ʀᴇᴍᴀɪɴɪɴɢ:** {rem}\n"
-        "**sᴛᴀᴛᴜs:** {sts}"
+        "**sᴛᴀᴛᴜs:** {status}"
     )
 
     outlist = []
-
-    # File store without DB channel
-    og_msg = 0
-    tot = 0
+    valid_count = 0
+    total = max(0, l_msg_id - f_msg_id + 1)
 
     async for msg in bot.iter_messages(
         f_chat_id,
-        l_msg_id,
-        f_msg_id
+        limit=total,
+        offset_id=l_msg_id + 1,
+        reverse=True,
     ):
-        tot += 1
-
-        if og_msg % 20 == 0:
-            try:
-                await sts.edit(
-                    FRMT.format(
-                        total=l_msg_id - f_msg_id,
-                        current=tot,
-                        rem=((l_msg_id - f_msg_id) - tot),
-                        sts="Saving Messages"
-                    )
-                )
-            except:
-                pass
-
         if msg.empty or msg.service:
             continue
 
-        file = {
+        outlist.append({
             "channel_id": f_chat_id,
-            "msg_id": msg.id
-        }
+            "msg_id": msg.id,
+        })
+        valid_count += 1
 
-        og_msg += 1
-        outlist.append(file)
+        if valid_count % 20 == 0:
+            try:
+                await sts.edit(
+                    status_format.format(
+                        total=total,
+                        current=valid_count,
+                        rem=max(0, total - valid_count),
+                        status="Saving Messages",
+                    )
+                )
+            except Exception:
+                pass
 
-    with open(
-        f"batchmode_{message.from_user.id}.json",
-        "w+"
-    ) as out:
-        json.dump(outlist, out)
+        if msg.id >= l_msg_id:
+            break
 
-    post = await bot.send_document(
-        LOG_CHANNEL,
-        f"batchmode_{message.from_user.id}.json",
-        file_name="Batch.json",
-        caption="⚠️ Batch Generated For Filestore."
-    )
+    if not outlist:
+        return await sts.edit("❌ No messages found in that range.")
 
-    os.remove(
-        f"batchmode_{message.from_user.id}.json"
-    )
+    filename = f"batchmode_{message.from_user.id}.json"
 
-    string = str(post.id)
+    try:
+        with open(filename, "w", encoding="utf-8") as out:
+            json.dump(outlist, out)
 
-    file_id = base64.urlsafe_b64encode(
-        string.encode("ascii")
-    ).decode().strip("=")
+        post = await bot.send_document(
+            LOG_CHANNEL,
+            filename,
+            file_name="Batch.json",
+            caption="⚠️ Batch Generated For Filestore.",
+        )
+    finally:
+        if os.path.exists(filename):
+            os.remove(filename)
 
+    encoded = encode_start(str(post.id))
     share_link = (
-        f"{WEBSITE_URL.rstrip('/')}"
-        f"?start=BATCH-{file_id}"
+        f"{WEBSITE_URL.rstrip('/')}?start=BATCH-{encoded}"
     )
 
-    permanent_link = await create_permanent_link(
-        share_link
+    permanent_link, share_link = await get_or_create_link(
+        batch_cache_key,
+        share_link,
     )
 
-    if permanent_link:
-        await sts.edit(
-            f"<b>⭕ ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ:\n\n"
-            f"Contains `{og_msg}` files.\n\n"
+    await sts.edit(
+        f"<b>⭕ ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ:\n\n"
+        f"Contains `{valid_count}` files.\n\n"
+        + (
             f"🔗 ᴘᴇʀᴍᴀɴᴇɴᴛ ʟɪɴᴋ :- {permanent_link}</b>"
+            if permanent_link
+            else f"🔗 ᴏʀɪɢɪɴᴀʟ ʟɪɴᴋ :- {share_link}</b>"
         )
-    else:
-        await sts.edit(
-            f"<b>⭕ ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ:\n\n"
-            f"Contains `{og_msg}` files.\n\n"
-            f"🔗 ᴏʀɪɢɪɴᴀʟ ʟɪɴᴋ :- {share_link}</b>"
-        )
+    )
