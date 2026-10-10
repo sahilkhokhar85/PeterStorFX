@@ -28,6 +28,7 @@ from config import (
 from plugins.settings_db import get_settings
 from plugins.admins_db import is_admin
 from plugins.dbusers import db
+from TechVJ.utils.cover_copy import copy_keep_cover
 
 
 # ============================================================
@@ -272,7 +273,7 @@ async def incoming_gen_link(bot, message):
     if saved and saved.get("share_link"):
         share_link = saved["share_link"]
     else:
-        post = await message.copy(LOG_CHANNEL)
+        post = await copy_keep_cover(message, LOG_CHANNEL)
         share_link = make_file_share_link(post.id)
 
     permanent_link, share_link = await get_or_create_link(
@@ -314,7 +315,7 @@ async def gen_link_s(bot, message):
     if saved and saved.get("share_link"):
         share_link = saved["share_link"]
     else:
-        post = await replied.copy(LOG_CHANNEL)
+        post = await copy_keep_cover(replied, LOG_CHANNEL)
         share_link = make_file_share_link(post.id)
 
     permanent_link, share_link = await get_or_create_link(
