@@ -1,24 +1,24 @@
-# /settings admin panel — lets admins change bot behaviour from chat,
-# without redeploying (values are stored in MongoDB via settings_db.py)
+# /settings admin panel — Force Subscribe, Admins, Bot Status and Restart.
+# Everything else (start message, caption, buttons, protect content,
+# auto delete, private mode) is fixed in the code / environment variables.
 
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from config import ADMINS, CUSTOM_FILE_CAPTION, PUBLIC_FILE_STORE
-from Script import script
+from config import ADMINS
 from plugins.settings_db import (
     get_settings, update_setting, add_force_sub_channel, remove_force_sub_channel,
-    touch_last_used, readable_ago, add_custom_button, remove_custom_button, clear_custom_buttons,
+    touch_last_used, readable_ago,
     force_sub_channel_id, force_sub_channel_mode, force_sub_channel_link, set_force_sub_link
 )
-from plugins.admins_db import dynamic_admin_filter, is_admin, get_all_admins, add_admin, remove_admin, set_permission, PERMISSIONS
+from plugins.admins_db import dynamic_admin_filter, is_admin, has_permission, get_all_admins, add_admin, remove_admin, set_permission, PERMISSIONS
 
 
 def main_menu_text(settings):
     last_used = readable_ago(settings.get("last_used"))
     return (
-        "⚙️ <b>ᴍʀɴ ʙᴏᴛ ꜱᴇᴛᴛɪɴɢꜱ ᴘᴀɴᴇʟ</b>\n"
+        "⚙️ <b>ᴄʜɪʟʟꜰʟɪᴢx ʙᴏᴛ ꜱᴇᴛᴛɪɴɢꜱ ᴘᴀɴᴇʟ</b>\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
-        "🍿 <i>Customise every feature of your MRN bot right from here.</i>\n\n"
+        "🍿 <i>Manage force subscribe, admins and bot status from here.</i>\n\n"
         f"⏰ <b>Last Used :</b> {last_used} ago\n\n"
         "👇 <b>Choose an option below</b>"
     )
@@ -26,16 +26,10 @@ def main_menu_text(settings):
 
 def main_menu_markup():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📝 ꜱᴛᴀʀᴛ ᴍᴇꜱꜱᴀɢᴇ", callback_data="adm_start"),
-         InlineKeyboardButton("🔘 ᴄᴜꜱᴛᴏᴍ ʙᴜᴛᴛᴏɴ", callback_data="adm_button")],
-        [InlineKeyboardButton("♻️ ᴀᴜᴛᴏ ᴅᴇʟᴇᴛᴇ", callback_data="adm_autodel"),
+        [InlineKeyboardButton("📢 ꜰᴏʀᴄᴇ ꜱᴜʙꜱᴄʀɪʙᴇ", callback_data="adm_fsub"),
          InlineKeyboardButton("👥 ᴀᴅᴍɪɴꜱ", callback_data="adm_admins")],
         [InlineKeyboardButton("📊 ʙᴏᴛ ꜱᴛᴀᴛᴜꜱ", callback_data="adm_status"),
-         InlineKeyboardButton("🛍 ʙᴏᴛ ᴍᴏᴅᴇ", callback_data="adm_mode")],
-        [InlineKeyboardButton("⏱ ʀᴇꜱᴛᴀʀᴛ ʙᴏᴛ", callback_data="adm_restart"),
-         InlineKeyboardButton("🔒 ᴘʀᴏᴛᴇᴄᴛ ᴄᴏɴᴛᴇɴᴛ", callback_data="adm_protect")],
-        [InlineKeyboardButton("🍿 ᴄᴜꜱᴛᴏᴍ ᴄᴀᴘᴛɪᴏɴ", callback_data="adm_caption"),
-         InlineKeyboardButton("📢 ꜰᴏʀᴄᴇ ꜱᴜʙꜱᴄʀɪʙᴇ", callback_data="adm_fsub")],
+         InlineKeyboardButton("⏱ ʀᴇꜱᴛᴀʀᴛ ʙᴏᴛ", callback_data="adm_restart")],
         [InlineKeyboardButton("✖ ᴄʟᴏꜱᴇ", callback_data="adm_close")],
     ])
 
@@ -65,6 +59,12 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
 
     data = query.data
     settings = await get_settings()
+
+    # Restart and admin management need the "Can Manage Admins" permission
+    # (the owners listed in ADMINS always have it).
+    if data == "adm_restart" or data.startswith("adm_admin"):
+        if not (user.id in ADMINS or await has_permission(user.id, "can_manage_admins")):
+            return await query.answer("You don't have permission for this.", show_alert=True)
 
     # ---------------- Main menu ----------------
     if data == "adm_menu":
@@ -100,15 +100,6 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")]]
         ))
-
-    # ---------------- Bot Mode ----------------
-    elif data == "adm_mode":
-        await render_mode_menu(query, settings)
-
-    elif data in ("adm_mode_public", "adm_mode_private"):
-        await update_setting("public_mode", data == "adm_mode_public")
-        settings["public_mode"] = data == "adm_mode_public"
-        await render_mode_menu(query, settings)
 
     # ---------------- Restart Bot ----------------
     elif data == "adm_restart":
@@ -176,46 +167,6 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
         await query.answer("Admin removed.", show_alert=True)
         await render_admins_menu(query)
 
-    # ---------------- Custom Button ----------------
-    elif data == "adm_button":
-        await render_button_menu(query, settings)
-
-    elif data == "adm_button_add":
-        await query.message.reply_text("<b>Send the button text.</b>\n/cancel to cancel.")
-        ans1 = await client.ask(query.message.chat.id, "")
-        if ans1.text and ans1.text.strip() != "/cancel":
-            btn_text = ans1.text.strip()
-            await ans1.reply_text("<b>Now send the button URL.</b>\n/cancel to cancel.")
-            ans2 = await client.ask(query.message.chat.id, "")
-            if ans2.text and ans2.text.strip() != "/cancel" and ans2.text.strip().startswith(("http://", "https://")):
-                await add_custom_button(btn_text, ans2.text.strip())
-                await ans2.reply_text("<b>✅ Button added.</b>")
-            elif ans2.text:
-                await ans2.reply_text("<b>❌ That doesn't look like a valid URL (must start with http:// or https://).</b>")
-        settings = await get_settings()
-        await render_button_menu(query, settings, edit=False)
-
-    elif data == "adm_button_remove":
-        settings = await get_settings()
-        flat = [b for row in (settings.get("custom_buttons") or []) for b in row]
-        if not flat:
-            return await query.answer("No custom buttons yet.", show_alert=True)
-        buttons = [[InlineKeyboardButton(f"❌ {b['text']}", callback_data=f"adm_button_rm_{i}")] for i, b in enumerate(flat)]
-        buttons.append([InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_button")])
-        await query.message.edit_text("<b>Tap a button to remove it:</b>", reply_markup=InlineKeyboardMarkup(buttons))
-
-    elif data.startswith("adm_button_rm_"):
-        index = int(data.replace("adm_button_rm_", "", 1))
-        await remove_custom_button(index)
-        settings = await get_settings()
-        await render_button_menu(query, settings)
-
-    elif data == "adm_button_clear":
-        await clear_custom_buttons()
-        await query.answer("All custom buttons cleared.", show_alert=True)
-        settings = await get_settings()
-        await render_button_menu(query, settings)
-
     # ---------------- Force Subscribe ----------------
     elif data == "adm_fsub":
         await render_fsub_menu(query, settings)
@@ -228,7 +179,7 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
 
     elif data == "adm_fsub_add":
         prompt = await query.message.reply_text(
-            "<b>Send the channel username (e.g. @Mrn_Officialx) or channel ID.</b>\n\n"
+            "<b>Send the channel username (e.g. @ChillFlizX) or channel ID.</b>\n\n"
             "Make sure the bot is an <b>admin</b> in that channel.\n/cancel to cancel."
         )
         ans = await client.ask(query.message.chat.id, "")
@@ -348,106 +299,6 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
         settings = await get_settings()
         await render_fsub_menu(query, settings)
 
-    # ---------------- Protect Content ----------------
-    elif data == "adm_protect":
-        await render_protect_menu(query, settings)
-
-    elif data in ("adm_protect_on", "adm_protect_off"):
-        await update_setting("protect_content", data == "adm_protect_on")
-        settings["protect_content"] = data == "adm_protect_on"
-        await render_protect_menu(query, settings)
-
-    # ---------------- Auto Delete ----------------
-    elif data == "adm_autodel":
-        await render_autodel_menu(query, settings)
-
-    elif data == "adm_autodel_toggle":
-        new_state = not settings.get("auto_delete", True)
-        await update_setting("auto_delete", new_state)
-        settings["auto_delete"] = new_state
-        await render_autodel_menu(query, settings)
-
-    elif data == "adm_autodel_time":
-        await query.message.reply_text("<b>Send auto-delete time in minutes (e.g. 30).</b>\n/cancel to cancel.")
-        ans = await client.ask(query.message.chat.id, "")
-        if ans.text and ans.text.strip() != "/cancel":
-            try:
-                minutes = int(ans.text.strip())
-                await update_setting("auto_delete_time", minutes * 60)
-                await ans.reply_text(f"<b>✅ Auto delete time set to {minutes} minutes.</b>")
-            except ValueError:
-                await ans.reply_text("<b>❌ Please send a number.</b>")
-        settings = await get_settings()
-        await render_autodel_menu(query, settings, edit=False)
-
-    # ---------------- Custom Caption ----------------
-    elif data == "adm_caption":
-        await render_caption_menu(query, settings)
-
-    elif data == "adm_caption_edit":
-        await query.message.reply_text(
-            "<b>Send the new caption format.</b>\n\n"
-            "Variables: <code>{file_name}</code> <code>{file_size}</code> <code>{file_caption}</code>\n/cancel to cancel."
-        )
-        ans = await client.ask(query.message.chat.id, "")
-        if ans.text and ans.text.strip() != "/cancel":
-            await update_setting("custom_caption", ans.text)
-            await ans.reply_text("<b>✅ Custom caption updated.</b>")
-        settings = await get_settings()
-        await render_caption_menu(query, settings, edit=False)
-
-    elif data == "adm_caption_show":
-        current = settings.get("custom_caption") or CUSTOM_FILE_CAPTION
-        await query.message.reply_text(f"<b>Current caption format:</b>\n\n<code>{current}</code>")
-        await query.answer()
-
-    elif data == "adm_caption_delete":
-        await update_setting("custom_caption", None)
-        settings["custom_caption"] = None
-        await query.answer("Reset to default caption.", show_alert=True)
-        await render_caption_menu(query, settings)
-
-    # ---------------- Start Message ----------------
-    elif data == "adm_start":
-        await render_start_menu(query, settings)
-
-    elif data == "adm_start_edit":
-        await query.message.reply_text(
-            "<b>Send the new start message text.</b>\n\n"
-            "You can use <code>{}</code> <code>{}</code> as placeholders for user mention and bot mention (optional).\n/cancel to cancel."
-        )
-        ans = await client.ask(query.message.chat.id, "")
-        if ans.text and ans.text.strip() != "/cancel":
-            await update_setting("start_message", ans.text)
-            await ans.reply_text("<b>✅ Start message updated.</b>")
-        settings = await get_settings()
-        await render_start_menu(query, settings, edit=False)
-
-    elif data == "adm_start_reset":
-        await update_setting("start_message", None)
-        settings["start_message"] = None
-        await query.answer("Reset to default start message.", show_alert=True)
-        await render_start_menu(query, settings)
-
-    elif data == "adm_start_pic":
-        await query.message.reply_text("<b>Send a photo to show with the Start message.</b>\n/cancel to cancel.")
-        ans = await client.ask(query.message.chat.id, "")
-        if ans.photo:
-            await update_setting("start_photo", ans.photo.file_id)
-            await ans.reply_text("<b>✅ Start message photo updated.</b>")
-        elif ans.text and ans.text.strip() == "/cancel":
-            await ans.reply_text("Cancelled.")
-        else:
-            await ans.reply_text("<b>⚠️ That wasn't a photo, nothing changed.</b>")
-        settings = await get_settings()
-        await render_start_menu(query, settings, edit=False)
-
-    elif data == "adm_start_pic_rm":
-        await update_setting("start_photo", None)
-        settings["start_photo"] = None
-        await query.answer("Removed - will use the default random pics again.", show_alert=True)
-        await render_start_menu(query, settings)
-
 
 async def render_fsub_menu(query, settings, edit=True):
     state = "✅ ON" if settings.get("force_sub") else "❌ OFF"
@@ -467,101 +318,6 @@ async def render_fsub_menu(query, settings, edit=True):
         [InlineKeyboardButton("✏️ ᴇᴅɪᴛ ᴍᴇꜱꜱᴀɢᴇ", callback_data="adm_fsub_msg")],
         [InlineKeyboardButton("🖼 ꜱᴇᴛ ꜰᴏʀᴄᴇ ᴘɪᴄ", callback_data="adm_fsub_pic"),
          InlineKeyboardButton("🗑 ʀᴇᴍᴏᴠᴇ ᴘɪᴄ", callback_data="adm_fsub_pic_rm")],
-        [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
-    ]
-    markup = InlineKeyboardMarkup(buttons)
-    if edit:
-        await query.message.edit_text(text, reply_markup=markup)
-    else:
-        await query.message.reply_text(text, reply_markup=markup)
-
-
-async def render_protect_menu(query, settings, edit=True):
-    state = "✅ ENABLED" if settings.get("protect_content") else "❌ DISABLED"
-    text = (
-        "<b>🔒 PROTECT CONTENT</b>\n\n"
-        "Restrict users from forwarding/saving files sent by this bot.\n\n"
-        f"<b>Status:</b> {state}"
-    )
-    buttons = [
-        [InlineKeyboardButton("✅ ᴇɴᴀʙʟᴇ", callback_data="adm_protect_on"),
-         InlineKeyboardButton("❌ ᴅɪꜱᴀʙʟᴇ", callback_data="adm_protect_off")],
-        [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
-    ]
-    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-
-
-async def render_autodel_menu(query, settings, edit=True):
-    state = "✅ ON" if settings.get("auto_delete") else "❌ OFF"
-    minutes = max(1, settings.get("auto_delete_time", 1800) // 60)
-    text = (
-        "<b>♻️ AUTO DELETE</b>\n\n"
-        "Automatically deletes delivered files after a set time.\n\n"
-        f"<b>Status:</b> {state}\n"
-        f"<b>Delete Time:</b> {minutes} minutes"
-    )
-    buttons = [
-        [InlineKeyboardButton("ᴛᴏɢɢʟᴇ ᴏɴ/ᴏꜰꜰ", callback_data="adm_autodel_toggle")],
-        [InlineKeyboardButton("⏱ ꜱᴇᴛ ᴛɪᴍᴇ", callback_data="adm_autodel_time")],
-        [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
-    ]
-    markup = InlineKeyboardMarkup(buttons)
-    if edit:
-        await query.message.edit_text(text, reply_markup=markup)
-    else:
-        await query.message.reply_text(text, reply_markup=markup)
-
-
-async def render_caption_menu(query, settings, edit=True):
-    text = "<b>🎬 CUSTOM CAPTION</b>\n\nSet the caption format used when files are delivered."
-    buttons = [
-        [InlineKeyboardButton("✏️ ᴇᴅɪᴛ ᴄᴀᴘᴛɪᴏɴ", callback_data="adm_caption_edit")],
-        [InlineKeyboardButton("👁 ꜱʜᴏᴡ ᴄᴀᴘᴛɪᴏɴ", callback_data="adm_caption_show"),
-         InlineKeyboardButton("🗑 ʀᴇꜱᴇᴛ", callback_data="adm_caption_delete")],
-        [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
-    ]
-    markup = InlineKeyboardMarkup(buttons)
-    if edit:
-        await query.message.edit_text(text, reply_markup=markup)
-    else:
-        await query.message.reply_text(text, reply_markup=markup)
-
-
-async def render_start_menu(query, settings, edit=True):
-    pic_state = "✅ ꜱᴇᴛ" if settings.get("start_photo") else "❌ ᴅᴇꜰᴀᴜʟᴛ (ʀᴀɴᴅᴏᴍ)"
-    text = (
-        "<b>📝 ꜱᴛᴀʀᴛ ᴍᴇꜱꜱᴀɢᴇ</b>\n\n"
-        "This text + image is shown when a user sends /start.\n"
-        f"🖼 <b>Image :</b> {pic_state}"
-    )
-    buttons = [
-        [InlineKeyboardButton("✏️ ᴇᴅɪᴛ ꜱᴛᴀʀᴛ ᴛᴇxᴛ", callback_data="adm_start_edit")],
-        [InlineKeyboardButton("🖼 ꜱᴇᴛ/ᴄʜᴀɴɢᴇ ɪᴍᴀɢᴇ", callback_data="adm_start_pic"),
-         InlineKeyboardButton("🗑 ʀᴇᴍᴏᴠᴇ ɪᴍᴀɢᴇ", callback_data="adm_start_pic_rm")],
-        [InlineKeyboardButton("🗑 ʀᴇꜱᴇᴛ ᴛᴏ ᴅᴇꜰᴀᴜʟᴛ", callback_data="adm_start_reset")],
-        [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
-    ]
-    markup = InlineKeyboardMarkup(buttons)
-    if edit:
-        await query.message.edit_text(text, reply_markup=markup)
-    else:
-        await query.message.reply_text(text, reply_markup=markup)
-
-
-async def render_mode_menu(query, settings, edit=True):
-    public_mode = settings.get("public_mode")
-    if public_mode is None:
-        public_mode = PUBLIC_FILE_STORE
-    state = "🛍 Public Mode" if public_mode else "🔒 Private Mode"
-    text = (
-        "<b>🛍 BOT MODE</b>\n\n"
-        "- <b>Public Mode:</b> any user can generate share links by sending files.\n"
-        "- <b>Private Mode:</b> only admins can generate share links.\n\n"
-        f"<b>Current Mode:</b> {state}"
-    )
-    buttons = [
-        [InlineKeyboardButton("🛍 ᴘᴜʙʟɪᴄ", callback_data="adm_mode_public"),
-         InlineKeyboardButton("🔒 ᴘʀɪᴠᴀᴛᴇ", callback_data="adm_mode_private")],
         [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
     ]
     markup = InlineKeyboardMarkup(buttons)
@@ -601,25 +357,3 @@ async def render_admin_detail(query, target_id):
     buttons.append([InlineKeyboardButton("🗑 ʀᴇᴍᴏᴠᴇ ᴀᴅᴍɪɴ", callback_data=f"adm_admin_remove_{target_id}")])
     buttons.append([InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_admins_list")])
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-
-
-async def render_button_menu(query, settings, edit=True):
-    rows = settings.get("custom_buttons") or []
-    count = sum(len(r) for r in rows)
-    text = (
-        "<b>🔘 CUSTOM BUTTON</b>\n\n"
-        "Add custom URL buttons that get attached to every file the bot delivers.\n"
-        "Up to 2 buttons per row, multiple rows supported.\n\n"
-        f"<b>Buttons added:</b> {count}"
-    )
-    buttons = [
-        [InlineKeyboardButton("➕ ᴀᴅᴅ ʙᴜᴛᴛᴏɴ", callback_data="adm_button_add"),
-         InlineKeyboardButton("➖ ʀᴇᴍᴏᴠᴇ ʙᴜᴛᴛᴏɴ", callback_data="adm_button_remove")],
-        [InlineKeyboardButton("🗑 ᴄʟᴇᴀʀ ᴀʟʟ", callback_data="adm_button_clear")],
-        [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
-    ]
-    markup = InlineKeyboardMarkup(buttons)
-    if edit:
-        await query.message.edit_text(text, reply_markup=markup)
-    else:
-        await query.message.reply_text(text, reply_markup=markup)
