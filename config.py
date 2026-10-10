@@ -66,4 +66,7 @@ if 'DYNO' in environ:
     ON_HEROKU = True
 else:
     ON_HEROKU = False
-URL = environ.get("URL", "https://mrn-store-tv-production.up.railway.app/")
+# Public base URL of this bot's web server (stream/download links + keep-alive ping).
+# Set the URL env var; on Railway we fall back to the service's own public domain.
+_railway_domain = environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+URL = environ.get("URL") or (f"https://{_railway_domain}/" if _railway_domain else "")
