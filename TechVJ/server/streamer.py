@@ -347,8 +347,10 @@ async def stream_media(request: web.Request, chat_id: int, message_id: int, secu
 
     offset = start - (start % CHUNK_SIZE)
     first_part_cut = start - offset
-    last_part_cut = end - offset + 1
-    part_count = math.ceil((end + 1) / CHUNK_SIZE) - math.floor(offset / CHUNK_SIZE)
+    part_count = math.ceil((end + 1) / CHUNK_SIZE) - (offset // CHUNK_SIZE)
+
+    # Last chunk ke andar kitne bytes bhejne hain
+    last_part_cut = ((end % CHUNK_SIZE) + 1)
 
     try:
         async for chunk in streamer.yield_file(
