@@ -328,7 +328,7 @@ async def ask_batch_reference(bot, chat_id, prompt):
 
     answer = await bot.ask(
         chat_id,
-        " ",
+        bold("Send the message link or forward the message."),
         timeout=300,
     )
 
