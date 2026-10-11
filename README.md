@@ -5,7 +5,7 @@
 <h1 align="center">🎬 ChillFlizX File Store Bot</h1>
 
 <p align="center">
-  <img src="https://readme-typing-svg.herokuapp.com/?lines=Welcome+To+ChillFlizX;A+Powerful+Telegram+File+Store+Bot;Permanent+Links+%7C+Custom+Shortener+%7C+Auto+Delete;Packed+With+Advanced+Features!;Thank+You!&center=true&width=560" alt="Typing SVG">
+  <img src="https://readme-typing-svg.herokuapp.com/?lines=Welcome+To+ChillFlizX;A+Powerful+Telegram+File+Store+Bot;Permanent+Links+%7C+Force+Subscribe+%7C+Auto+Delete;Packed+With+Advanced+Features!;Thank+You!&center=true&width=560" alt="Typing SVG">
 </p>
 
 ---
@@ -20,8 +20,6 @@
 | | Feature |
 |---|---|
 | 🌐 | Permanent links through the ChillFlizX website (premium feature) |
-| 🛡 | Token verification |
-| 🔗 | Custom URL shortener: every user can add their own shortener |
 | 📦 | Batch support: link many files at once (bot admins only, from a channel the bot is admin in) |
 | ♻️ | Auto delete of delivered files |
 | 🖼 | Start message with a picture |
@@ -36,7 +34,7 @@
 
 ## 🔧 Environment Variables
 
-> ⚠️ `API_HASH`, `DB_URI` and `SHORTLINK_API` have no default value. Set them in your host's variables and never commit them.
+> ⚠️ `API_HASH` and `DB_URI` have no default value. Set them in your host's variables and never commit them.
 
 <details>
 <summary><b>👉 Tap to open the variable list</b></summary>
@@ -65,14 +63,6 @@
 | `STREAM_MODE` | `True` / `False`: Fast Download / Watch Online buttons on delivered files |
 | `URL` | Your server app link with `https://` and one `/` at the end (also used for Fast Download / Watch Online links) |
 
-### Verification
-
-| Variable | Meaning |
-|---|---|
-| `VERIFY_MODE` | `True` / `False`: token verification |
-| `SHORTLINK_URL` | Verify shortener domain without `https://`, only if `VERIFY_MODE` is `True` |
-| `SHORTLINK_API` | Verify shortener API key, only if `VERIFY_MODE` is `True` |
-
 ### Auto delete and hosting
 
 | Variable | Meaning |
@@ -99,14 +89,11 @@ If `URL` is empty, Railway's `RAILWAY_PUBLIC_DOMAIN` is used.
 | `/start` | Check that the bot is alive, and open file links |
 | `/link` | Reply to a file with this to get its shareable link |
 | `/batch` | Make one link for many files: `/batch (first post link) (last post link)` |
-| `/base_site` | Set your own shortener domain: `/base_site domain.com` |
-| `/api` | Set your own shortener API key: `/api (your api key)` |
 | `/broadcast` | Reply to a message to broadcast it to all users (owner only) |
 | `/ban` `/unban` | Ban or unban users: `/ban id1 id2 id3`, reply to a user, or send a `.txt` file of ids. Banned ids (even ones that never used the bot) get no reply at all |
 | `/banlist` | Download the full ban list as a `.txt` file |
-| `/status` | Users, banned users, CPU, RAM and uptime |
+| `/status` or `/stats` | Users, banned users, CPU, RAM and uptime (both commands do the same) |
 | `/settings` | Admin panel: Force Subscribe, Admins, Bot Status, Restart |
-| `/delreq` | Clear all recorded join requests |
 | `/restart` | Restart the bot |
 
 </details>
