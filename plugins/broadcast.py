@@ -23,10 +23,10 @@ async def broadcast_messages(user_id, message):
         await asyncio.sleep(e.value)
         return await broadcast_messages(user_id, message)
     except InputUserDeactivated:
-        await db.delete_user(int(user_id))
+        await db.delete_user_unless_banned(int(user_id))
         return False, "Deleted"
     except UserIsBlocked:
-        await db.delete_user(int(user_id))
+        await db.delete_user_unless_banned(int(user_id))
         return False, "Blocked"
     except PeerIdInvalid:
         # NOTE: PeerIdInvalid does NOT mean the user blocked/deleted the bot.
