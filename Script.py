@@ -19,16 +19,6 @@ Welcome To ChillFliz File Store Bot! ✨❤️
 <b>😘Join - Share - Like >>> @ChillFlizX⚡</b>"""
 
 
-    SHORTENER_API_MESSAGE = """<b>Tᴏ ᴀᴅᴅ ᴏʀ ᴜᴘᴅᴀᴛᴇ ʏᴏᴜʀ Sʜᴏʀᴛɴᴇʀ Wᴇʙsɪᴛᴇ API, /api (ᴀᴘɪ)
-            
-<b>Ex: /api 2819a959174f367d970d3fab75634fa88f8b8f25
-
-<b>Cᴜʀʀᴇɴᴛ Wᴇʙsɪᴛᴇ: {base_site}
-
-Cᴜʀʀᴇɴᴛ Sʜᴏʀᴛᴇɴᴇʀ API:</b> `{shortener_api}`
-
-If You Want To Remove Api Then Copy This And Send To Bot - `/api None`"""
-
 
     ABOUT_TXT = """<b>ɪ ᴀᴍ ᴀ ᴄʜɪʟʟғʟɪᴢ ғɪʟᴇ sᴛᴏʀᴇ ʙᴏᴛ ғᴏʀ ᴀʟʟ ᴄᴏɴᴛᴇɴᴛs. ᴀᴄᴄᴇss ʏᴏᴜʀ ᴄᴏɴᴛᴇɴᴛ ᴇᴀsɪʟʏ ᴛʜʀᴏᴜɢʜ ᴛʜᴇ ɪɪɴᴋs ᴘʀᴏᴠɪᴅᴇᴅ.
 
@@ -64,12 +54,6 @@ If You Want To Remove Api Then Copy This And Send To Bot - `/api None`"""
 🔻 /batch - sᴇɴᴅ ғɪʀsᴛ ʟɪɴᴋ ᴏғ ғɪʟᴇ sᴛᴏʀᴇ ᴄʜᴀɴɴᴇʟ ᴘᴏsᴛ ᴛʜᴇɴ ʟᴀsᴛ ᴘᴏsᴛ ʟɪɴᴋ ᴀɴᴅ ᴍᴀᴋᴇ sᴜʀᴇ ʙᴏᴛ ɪs ᴀᴅᴍɪɴ ɪɴ ʏᴏᴜʀ ғɪʟᴇ sᴛᴏʀᴇ ᴄʜᴀɴɴᴇʟ.
 ᴇx - /batch https://t.me/ChillFlizX
 
-🔻 /base_site - ᴜsᴇ ᴛʜɪs ᴄᴏᴍᴍᴀɴᴅ ᴛᴏ sᴇᴛ ᴜʀʟ sʜᴏʀᴛɴᴇʀ ʟɪɴᴋ ᴅᴏᴍᴀɪɴ 
-ᴇx - /base_site ʏᴏᴜʀᴅᴏᴍᴀɪɴ.ᴄᴏᴍ
-
-🔻 /api - sᴇᴛ ʏᴏᴜʀ ᴜʀʟ sʜᴏʀᴛɴᴇʀ ᴀᴄᴄᴏᴜɴᴛ ᴀᴘɪ 
-ᴇx - /api ʙᴀᴏᴡɢᴡᴋʟᴀᴀʙᴀᴋʟ
-
 🔻 /broadcast - ʀᴇᴘʟʏ ᴛᴏ ᴀ ᴍᴇssᴀɢᴇ ᴛᴏ ʙʀᴏᴀᴅᴄᴀsᴛ (ʙᴏᴛ ᴏᴡɴᴇʀ ᴏɴʟʏ)
 
 🔻 /ban (user_id) - ʙᴀɴ ᴀ ᴜsᴇʀ ғʀᴏᴍ ᴛʜᴇ ʙᴏᴛ (ᴀᴅᴍɪɴ ᴏɴʟʏ)
@@ -78,18 +62,12 @@ If You Want To Remove Api Then Copy This And Send To Bot - `/api None`"""
 
 🔻 /status - ᴠɪᴇᴡ ʙᴏᴛ sᴛᴀᴛᴜs: ᴜsᴇʀs, ʙᴀɴ ᴜsᴇʀs, ᴄᴘᴜ, ʀᴀᴍ, ᴜᴘᴛɪᴍᴇ (ᴀᴅᴍɪɴ ᴏɴʟʏ)
 
-🔻 /settings - ᴏᴘᴇɴ ᴀᴅᴍɪɴ sᴇᴛᴛɪɴɢs ᴘᴀɴᴇʟ: ꜰᴏʀᴄᴇ sᴜʙsᴄʀɪʙᴇ, ᴘʀᴏᴛᴇᴄᴛ ᴄᴏɴᴛᴇɴᴛ, ᴀᴜᴛᴏ ᴅᴇʟᴇᴛᴇ, ᴄᴀᴘᴛɪᴏɴ, sᴛᴀʀᴛ ᴍᴇssᴀɢᴇ (ᴀᴅᴍɪɴ ᴏɴʟʏ)</b>"""
+🔻 /settings - ᴏᴘᴇɴ ᴀᴅᴍɪɴ sᴇᴛᴛɪɴɢs ᴘᴀɴᴇʟ: ꜰᴏʀᴄᴇ sᴜʙsᴄʀɪʙᴇ, ᴀᴅᴍɪɴs, ʙᴏᴛ sᴛᴀᴛᴜs, ʀᴇsᴛᴀʀᴛ (ᴀᴅᴍɪɴ ᴏɴʟʏ)</b>"""
 
 
     CHELP_TXT = """<b>💢 Hᴏᴡ Tᴏ Usᴇ Tʜɪs Bᴏᴛ ☺️
 
 🔻 /link - ʀᴇᴘʟʏ ᴛᴏ ᴀ ᴠɪᴅᴇᴏ ᴏʀ ғɪʟᴇ ᴛᴏ ɢᴇᴛ sʜᴀʀᴀʙʟᴇ ʟɪɴᴋ
-
-🔻 /base_site - ᴜsᴇ ᴛʜɪs ᴄᴏᴍᴍᴀɴᴅ ᴛᴏ sᴇᴛ ᴜʀʟ sʜᴏʀᴛɴᴇʀ ʟɪɴᴋ ᴅᴏᴍᴀɪɴ
-ᴇx - /base_site ʏᴏᴜʀᴅᴏᴍᴀɪɴ.ᴄᴏᴍ
-
-🔻 /api - sᴇᴛ ʏᴏᴜʀ ᴜʀʟ sʜᴏʀᴛɴᴇʀ ᴀᴄᴄᴏᴜɴᴛ ᴀᴘɪ
-ᴇx - /api ʙᴀᴏᴡɢᴡᴋʟᴀᴀʙᴀᴋʟ
 
 🔻 /broadcast - ʀᴇᴘʟʏ ᴛᴏ ᴛʜɪs ᴄᴏᴍᴍᴀɴᴅ ᴛᴏ ᴀ ᴍᴇssᴀɢᴇ ᴛᴏ ʙʀᴏᴀᴅᴄᴀsᴛ (ʙᴏᴛ ᴏᴡɴᴇʀ ᴏɴʟʏ)</b>"""
 
