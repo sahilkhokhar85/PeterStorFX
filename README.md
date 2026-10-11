@@ -92,7 +92,7 @@ If `URL` is empty, Railway's `RAILWAY_PUBLIC_DOMAIN` is used.
 | `/broadcast` | Reply to a message to broadcast it to all users (owner only) |
 | `/ban` `/unban` | Ban or unban users: `/ban id1 id2 id3`, reply to a user, or send a `.txt` file of ids. Banned ids (even ones that never used the bot) get no reply at all |
 | `/banlist` | Download the full ban list as a `.txt` file |
-| `/status` or `/stats` | Users, banned users, CPU, RAM and uptime (both commands do the same) |
+| `/status` | Users, banned users, CPU, RAM and uptime |
 | `/settings` | Admin panel: Force Subscribe, Admins, Bot Status, Restart |
 | `/restart` | Restart the bot |
 
