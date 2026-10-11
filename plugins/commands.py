@@ -254,7 +254,7 @@ async def start(client, message):
             )
     elif data.split("-", 1)[0] == "BATCH":
         try:
-            if not await check_verification(client, message.from_user.id) and VERIFY_MODE == True:
+            if VERIFY_MODE == True and not await check_verification(client, message.from_user.id):
                 btn = [[
                     InlineKeyboardButton("Verify", url=await get_token(client, message.from_user.id, f"https://telegram.me/{username}?start="))
                 ],[
@@ -534,8 +534,12 @@ async def start(client, message):
         return
 
 
-    pre, decode_file_id = ((base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))).decode("ascii")).split("_", 1)
-    if not await check_verification(client, message.from_user.id) and VERIFY_MODE == True:
+    try:
+        pre, decode_file_id = ((base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))).decode("ascii")).split("_", 1)
+    except Exception:
+        # e.g. /start true, or a broken / edited link - answer instead of failing silently
+        return await message.reply_text("<b>❌ This link is invalid or broken.</b>")
+    if VERIFY_MODE == True and not await check_verification(client, message.from_user.id):
         btn = [[
             InlineKeyboardButton("Verify", url=await get_token(client, message.from_user.id, f"https://telegram.me/{username}?start="))
         ],[
