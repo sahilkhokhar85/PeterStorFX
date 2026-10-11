@@ -11,6 +11,7 @@ from plugins.settings_db import get_settings
 from plugins.force_sub import not_joined_channels, force_sub_join_buttons, get_missing_and_buttons
 from TechVJ.server.streamer import build_stream_urls
 from TechVJ.utils.cover_copy import copy_keep_cover as _copy_media
+from TechVJ.utils.pending_deletes import run_delete
 from config import *
 import re
 import json
@@ -135,26 +136,25 @@ def _spawn(coro):
 async def _delete_batch_later(delay, filesarr, notice):
     """Auto-delete a delivered batch after `delay` seconds. Runs as a background
     task so the /start handler (and its Pyrogram worker) is freed immediately
-    instead of sleeping for the whole auto-delete time."""
-    await asyncio.sleep(delay)
-    await asyncio.gather(*[x.delete() for x in filesarr], return_exceptions=True)
-    try:
-        await notice.edit_text("<b>Your All Files/Videos is successfully deleted!!!</b>")
-    except Exception:
-        pass
+    instead of sleeping for the whole auto-delete time. The job is also saved in
+    MongoDB (TechVJ/utils/pending_deletes.py), so it still happens if the bot
+    restarts before the time is up."""
+    await run_delete(
+        notice._client, delay, notice.chat.id,
+        [x.id for x in filesarr if x],
+        notice.id,
+        "<b>Your All Files/Videos is successfully deleted!!!</b>",
+    )
 
 
 async def _delete_single_later(delay, del_msg, notice):
     """Same as above, for a single delivered file."""
-    await asyncio.sleep(delay)
-    try:
-        await del_msg.delete()
-    except Exception:
-        pass
-    try:
-        await notice.edit_text("<b>Your File/Video is successfully deleted!!!</b>")
-    except Exception:
-        pass
+    await run_delete(
+        notice._client, delay, notice.chat.id,
+        [del_msg.id],
+        notice.id,
+        "<b>Your File/Video is successfully deleted!!!</b>",
+    )
 
 
 @Client.on_message(filters.command("start") & filters.incoming)
