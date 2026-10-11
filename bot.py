@@ -19,6 +19,7 @@ from TechVJ.bot import StreamBot
 from TechVJ.server import web_server
 from TechVJ.utils.keepalive import ping_server
 from TechVJ.utils.watchdog import run_watchdog, mark_ok
+from TechVJ.utils.pending_deletes import restore_pending_deletes
 
 
 loop = asyncio.get_event_loop()
@@ -61,6 +62,8 @@ async def start():
     StreamBot.username = me.username
     mark_ok()
     asyncio.create_task(run_watchdog(StreamBot))
+    # Files that were due for auto-delete while the bot was down / restarting
+    asyncio.create_task(restore_pending_deletes(StreamBot))
     # NOTE: plugins are already loaded by Pyrogram itself (plugins={"root": "plugins"}
     # in TechVJ/bot/__init__.py) when StreamBot.start() runs above. The old manual
     # importlib loop re-executed every plugin a second time (duplicate Mongo clients).
