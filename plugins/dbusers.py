@@ -42,6 +42,11 @@ class Database:
     async def delete_user(self, user_id):
         await self.col.delete_many({'id': int(user_id)})
 
+    async def delete_user_unless_banned(self, user_id):
+        # Banned users keep their record, otherwise the ban is lost when a
+        # broadcast finds they blocked the bot and they could just /start again.
+        await self.col.delete_one({'id': int(user_id), 'banned': {'$ne': True}})
+
     async def ban_user(self, user_id):
         await self.col.update_one({'id': int(user_id)}, {'$set': {'banned': True}})
 
