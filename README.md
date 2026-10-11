@@ -68,7 +68,6 @@
 | Variable | Meaning |
 |---|---|
 | `AUTO_DELETE_MODE` | `True` / `False`: auto delete delivered files |
-| `AUTO_DELETE` | Delete time in minutes |
 | `AUTO_DELETE_TIME` | Delete time in seconds (this one is used by the bot) |
 | `PYTHON_VERSION` | Only for Render, value `3.10.8` |
 | `PORT` | Only for Render, value `8080` (default `8080`) |
