@@ -16,7 +16,7 @@ from plugins.admins_db import dynamic_admin_filter, is_admin, has_permission, ge
 def main_menu_text(settings):
     last_used = readable_ago(settings.get("last_used"))
     return (
-        "⚙️ <b>ᴄʜɪʟʟꜰʟɪᴢx ʙᴏᴛ ꜱᴇᴛᴛɪɴɢꜱ ᴘᴀɴᴇʟ</b>\n"
+        "⚙️ <b>ʙᴏᴛ ꜱᴇᴛᴛɪɴɢꜱ ᴘᴀɴᴇʟ</b>\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         "🍿 <i>Manage force subscribe, admins and bot status from here.</i>\n\n"
         f"⏰ <b>Last Used :</b> {last_used} ago\n\n"
@@ -34,7 +34,7 @@ def main_menu_markup():
     ])
 
 
-@Client.on_message(filters.command(["settings", "customize"]) & dynamic_admin_filter("can_settings"))
+@Client.on_message(filters.command("settings") & dynamic_admin_filter("can_settings"))
 async def settings_cmd(client, message: Message):
     settings = await get_settings()
     await touch_last_used()
@@ -179,7 +179,7 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
 
     elif data == "adm_fsub_add":
         prompt = await query.message.reply_text(
-            "<b>Send the channel username (e.g. @ChillFlizX) or channel ID.</b>\n\n"
+            "<b>Send the channel username (e.g. @yourchannel) or channel ID.</b>\n\n"
             "Make sure the bot is an <b>admin</b> in that channel.\n/cancel to cancel."
         )
         ans = await client.ask(query.message.chat.id, "")
