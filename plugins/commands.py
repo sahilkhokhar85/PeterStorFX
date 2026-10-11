@@ -2,14 +2,11 @@ import os
 import logging
 import random
 import asyncio
-from validators import domain
 from Script import script
 from plugins.dbusers import db
 from pyrogram import Client, filters, enums
-from plugins.users_api import get_user, update_user_info
 from pyrogram.errors import ChatAdminRequired, FloodWait
 from pyrogram.types import *
-from utils import verify_user, check_token, check_verification, get_token
 from plugins.settings_db import get_settings
 from plugins.force_sub import not_joined_channels, force_sub_join_buttons, get_missing_and_buttons
 from TechVJ.server.streamer import build_stream_urls
@@ -231,43 +228,7 @@ async def start(client, message):
     except:
         file_id = data
         pre = ""
-    if data.split("-", 1)[0] == "verify":
-        userid = data.split("-", 2)[1]
-        token = data.split("-", 3)[2]
-        if str(message.from_user.id) != str(userid):
-            return await message.reply_text(
-                text="<b>Invalid link or Expired link !</b>",
-                protect_content=True
-            )
-        is_valid = await check_token(client, userid, token)
-        if is_valid == True:
-            await message.reply_text(
-                text=f"<b>Hey {message.from_user.mention}, You are successfully verified !\nNow you have unlimited access for all files till today midnight.</b>",
-                protect_content=True
-            )
-            await verify_user(client, userid, token)
-            return
-        else:
-            return await message.reply_text(
-                text="<b>Invalid link or Expired link !</b>",
-                protect_content=True
-            )
-    elif data.split("-", 1)[0] == "BATCH":
-        try:
-            if VERIFY_MODE == True and not await check_verification(client, message.from_user.id):
-                btn = [[
-                    InlineKeyboardButton("Verify", url=await get_token(client, message.from_user.id, f"https://telegram.me/{username}?start="))
-                ],[
-                    InlineKeyboardButton("How To Open Link & Verify", url=VERIFY_TUTORIAL)
-                ]]
-                await message.reply_text(
-                    text="<b>You are not verified !\nKindly verify to continue !</b>",
-                    protect_content=True,
-                    reply_markup=InlineKeyboardMarkup(btn)
-                )
-                return
-        except Exception as e:
-            return await message.reply_text(f"**Error - {e}**")
+    if data.split("-", 1)[0] == "BATCH":
         sts = await message.reply("**🔺 ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ**")
         file_id = data.split("-", 1)[1]
         msgs = BATCH_FILES.get(file_id)
@@ -539,18 +500,6 @@ async def start(client, message):
     except Exception:
         # e.g. /start true, or a broken / edited link - answer instead of failing silently
         return await message.reply_text("<b>❌ This link is invalid or broken.</b>")
-    if VERIFY_MODE == True and not await check_verification(client, message.from_user.id):
-        btn = [[
-            InlineKeyboardButton("Verify", url=await get_token(client, message.from_user.id, f"https://telegram.me/{username}?start="))
-        ],[
-            InlineKeyboardButton("How To Open Link & Verify", url=VERIFY_TUTORIAL)
-        ]]
-        await message.reply_text(
-            text="<b>You are not verified !\nKindly verify to continue !</b>",
-            protect_content=True,
-            reply_markup=InlineKeyboardMarkup(btn)
-        )
-        return
     try:
         msg = await client.get_messages(LOG_CHANNEL, int(decode_file_id))
 
@@ -742,47 +691,6 @@ async def start(client, message):
             "Please ask the admin to generate a new link.</b>"
         )
         
-
-@Client.on_message(filters.command('api') & filters.private)
-async def shortener_api_handler(client, m: Message):
-    user_id = m.from_user.id
-    user = await get_user(user_id)
-    cmd = m.command
-
-    if len(cmd) == 1:
-        s = script.SHORTENER_API_MESSAGE.format(base_site=user["base_site"], shortener_api=user["shortener_api"])
-        return await m.reply(s)
-
-    elif len(cmd) == 2:    
-        api = cmd[1].strip()
-        if api.lower() == "none":
-            # "/api None" removes the saved API (it used to be stored as the literal string "None")
-            await update_user_info(user_id, {"shortener_api": None})
-            return await m.reply("<b>Shortener API removed successfully</b>")
-        await update_user_info(user_id, {"shortener_api": api})
-        await m.reply("<b>Shortener API updated successfully to</b> " + api)
-
-
-@Client.on_message(filters.command("base_site") & filters.private)
-async def base_site_handler(client, m: Message):
-    user_id = m.from_user.id
-    user = await get_user(user_id)
-    cmd = m.command
-    text = f"`/base_site (base_site)`\n\n<b>Current base site: None\n\n EX:</b> `/base_site shortnerdomain.com`\n\nIf You Want To Remove Base Site Then Copy This And Send To Bot - `/base_site None`"
-    if len(cmd) == 1:
-        return await m.reply(text=text, disable_web_page_preview=True)
-    elif len(cmd) == 2:
-        base_site = cmd[1].strip()
-        if base_site.lower() == "none":
-            # "/base_site None" removes the saved base site (the old `== None` check never matched a string)
-            await update_user_info(user_id, {"base_site": None})
-            return await m.reply("<b>Base Site removed successfully</b>")
-            
-        if not domain(base_site):
-            return await m.reply(text=text, disable_web_page_preview=True)
-        await update_user_info(user_id, {"base_site": base_site})
-        await m.reply("<b>Base Site updated successfully</b>")
-
 
 @Client.on_callback_query(filters.regex(r"^(close_data|about|start|help)$"))
 async def cb_handler(client: Client, query: CallbackQuery):
