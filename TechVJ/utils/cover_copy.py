@@ -19,7 +19,9 @@ carries `video_cover` (+ `video_timestamp`). So this module:
      no extra API call to find the cover).
 
 Requires pyrofork >= 2.3.58. pyrofork 2.3.45 is layer 187 and has no
-`video_cover` field at all.
+`video_cover` field at all. (This module deliberately reads the raw message
+instead of Video.cover / Video.start_timestamp: those typed attributes only
+exist from pyrofork 2.3.60, while `message.raw` works on 2.3.58 and later.)
 """
 
 import logging
@@ -31,20 +33,22 @@ logger = logging.getLogger(__name__)
 
 
 def _cover_media(src):
-    """Return src.raw.media if it is a document that carries a video cover,
-    otherwise None."""
+    """Return src.raw.media if it is a document that carries a video cover or a
+    video start timestamp, otherwise None."""
     media = getattr(getattr(src, "raw", None), "media", None)
     if not isinstance(media, raw.types.MessageMediaDocument):
         return None
     if not isinstance(getattr(media, "document", None), raw.types.Document):
         return None
-    if not isinstance(getattr(media, "video_cover", None), raw.types.Photo):
+    has_photo = isinstance(getattr(media, "video_cover", None), raw.types.Photo)
+    if not has_photo and not getattr(media, "video_timestamp", None):
         return None
     return media
 
 
 def has_cover(src) -> bool:
-    """True if `src` (a pyrogram Message) is a video that has a Telegram cover."""
+    """True if `src` (a pyrogram Message) is a video that has a Telegram cover
+    (or a start timestamp, which plain copy() drops as well)."""
     return _cover_media(src) is not None
 
 
@@ -75,10 +79,14 @@ async def copy_with_cover(src, chat_id, caption=None, reply_markup=None, protect
             access_hash=doc.access_hash,
             file_reference=doc.file_reference,
         ),
-        video_cover=raw.types.InputPhoto(
-            id=cover.id,
-            access_hash=cover.access_hash,
-            file_reference=cover.file_reference,
+        video_cover=(
+            raw.types.InputPhoto(
+                id=cover.id,
+                access_hash=cover.access_hash,
+                file_reference=cover.file_reference,
+            )
+            if isinstance(cover, raw.types.Photo)
+            else None
         ),
         video_timestamp=getattr(media, "video_timestamp", None),
         spoiler=getattr(media, "spoiler", None) or None,
