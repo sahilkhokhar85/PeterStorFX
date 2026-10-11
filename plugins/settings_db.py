@@ -195,11 +195,3 @@ async def clear_join_request(user_id, channel_id):
     """Wipe the recorded join request when a user leaves/is kicked from the
     channel, so they're required to request again next time."""
     await _join_requests_col.delete_one({"user_id": int(user_id), "channel_id": int(channel_id)})
-
-
-async def clear_all_join_requests():
-    """Manual safety net for admins: wipe every recorded join request so
-    everyone has to send a fresh request. Useful if you ever suspect some
-    individual leave-events were missed and records have gone stale."""
-    result = await _join_requests_col.delete_many({})
-    return result.deleted_count
