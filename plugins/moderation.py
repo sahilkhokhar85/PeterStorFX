@@ -32,7 +32,28 @@ _MAX_ID_FILE = 5 * 1024 * 1024  # 5 MB is plenty for a list of ids
 
 
 def _ids_from_text(text):
+    """Ids typed in the command: every 5-16 digit number counts."""
     return {int(x) for x in _ID_RE.findall(text or "")}
+
+
+def _ids_from_file_text(text):
+    """Ids from a .txt / .csv file, line by line.
+    - a line of only numbers (one or many, any separator) -> all of them are ids
+    - a CSV row like "123456789,Name,Last,username,reason" -> only the FIRST column
+      is the id (so digits inside names / usernames are never banned by mistake)
+    - header lines such as "id,firstname,..." are ignored"""
+    ids = set()
+    for line in (text or "").splitlines():
+        line = line.strip().lstrip("\ufeff")
+        if not line:
+            continue
+        if re.fullmatch(r"[\d\s,;\t]+", line):
+            ids |= {int(x) for x in _ID_RE.findall(line)}
+            continue
+        first = re.split(r"[,;\t ]", line, maxsplit=1)[0].strip()
+        if re.fullmatch(r"\d{5,16}", first):
+            ids.add(int(first))
+    return ids
 
 
 async def _collect_target_ids(client, message: Message):
@@ -49,7 +70,7 @@ async def _collect_target_ids(client, message: Message):
         if doc and (doc.file_size or 0) <= _MAX_ID_FILE:
             try:
                 data = await client.download_media(doc, in_memory=True)
-                ids |= _ids_from_text(bytes(data.getbuffer()).decode("utf-8", errors="ignore"))
+                ids |= _ids_from_file_text(bytes(data.getbuffer()).decode("utf-8", errors="ignore"))
             except Exception as e:
                 await message.reply_text(f"<b>❌ Couldn't read that file:</b> <code>{type(e).__name__}</code>")
 
