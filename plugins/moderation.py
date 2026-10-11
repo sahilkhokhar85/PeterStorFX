@@ -135,7 +135,7 @@ async def banlist_cmd(client, message: Message):
     await message.reply_document(buf, caption=f"<b>🚫 Banned ids: {len(ids)}</b>")
 
 
-@Client.on_message(filters.command(["status", "stats"]) & dynamic_admin_filter())
+@Client.on_message(filters.command("status") & dynamic_admin_filter())
 async def bot_status(client, message: Message):
     total_users = await db.total_users_count()
     total_banned = await db.total_banned_count()
