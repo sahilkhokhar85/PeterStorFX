@@ -168,7 +168,7 @@ async def start(client, message):
         await db.add_user(message.from_user.id, message.from_user.first_name)
         await client.send_message(LOG_CHANNEL, script.LOG_TEXT.format(message.from_user.id, message.from_user.mention))
     elif user_doc.get('banned', False):
-        return await message.reply_text("<b>🚫 You are banned from using this bot.</b>")
+        return  # banned users get no reply at all (plugins/ban_guard.py already blocks them earlier)
 
     settings = await get_settings()
     missing_channels, fsub_buttons = await get_missing_and_buttons(client, message.from_user.id, settings)
