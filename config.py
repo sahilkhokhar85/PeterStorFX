@@ -43,13 +43,7 @@ BATCH_FILE_CAPTION = environ.get("BATCH_FILE_CAPTION", CUSTOM_FILE_CAPTION)
 # Enable - True or Disable - False
 PUBLIC_FILE_STORE = is_enabled((environ.get('MZAUTOFILTER', "True")), True)
 
-# Verify Info :-
-VERIFY_MODE = is_enabled(environ.get('VERIFY_MODE', "False"), False) # Set True or False
 
-# If Verify Mode Is True Then Fill All Required Variable, If False Then Don't Fill.
-SHORTLINK_URL = environ.get("SHORTLINK_URL", "linkshortify.com") # shortlink domain without https://
-SHORTLINK_API = environ.get("SHORTLINK_API", "") # shortlink api (set in environment variables)
-VERIFY_TUTORIAL = environ.get("VERIFY_TUTORIAL", "https://t.me/ChillFlizDemo/34") # how to open link 
 
 # Website Info:
 WEBSITE_URL_MODE = is_enabled(environ.get('WEBSITE_URL_MODE', "True"), True) # Set True or False
