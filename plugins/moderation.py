@@ -135,17 +135,6 @@ async def banlist_cmd(client, message: Message):
     await message.reply_document(buf, caption=f"<b>🚫 Banned ids: {len(ids)}</b>")
 
 
-@Client.on_message(filters.command("delreq") & dynamic_admin_filter())
-async def delreq_cmd(client, message: Message):
-    """Manual safety net: wipes every recorded 'Join Request Mode' record so
-    everyone has to send a fresh request. Individual leaves are already
-    detected and cleared automatically - use this only if you suspect some
-    got missed and want to force a clean reset for all channels at once."""
-    from plugins.settings_db import clear_all_join_requests
-    count = await clear_all_join_requests()
-    await message.reply_text(f"<b>✅ Cleared {count} join-request record(s).</b> Everyone will need to send a fresh join request.")
-
-
 @Client.on_message(filters.command(["status", "stats"]) & dynamic_admin_filter())
 async def bot_status(client, message: Message):
     total_users = await db.total_users_count()
