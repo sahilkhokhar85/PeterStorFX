@@ -13,6 +13,7 @@ from TechVJ.server.streamer import (
     stream_media,
 )
 from config import STREAM_MODE
+from plugins.dbusers import db
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,9 @@ async def download_route_handler(request: web.Request):
     if not STREAM_MODE:
         raise web.HTTPNotFound(text="Streaming is disabled on this bot.")
     try:
-        chat_id, message_id = decode_stream_token(request.match_info["token"])
+        chat_id, message_id, user_id = decode_stream_token(request.match_info["token"])
+        if await db.is_user_banned(user_id):
+            raise web.HTTPForbidden(text="Access denied.")
         secure_hash = request.rel_url.query.get("hash", "")
         return await stream_media(request, chat_id, message_id, secure_hash)
     except InvalidStreamHash as e:
@@ -90,9 +93,11 @@ async def watch_route_handler(request: web.Request):
     if not STREAM_MODE:
         raise web.HTTPNotFound(text="Streaming is disabled on this bot.")
     try:
-        chat_id, message_id = decode_stream_token(request.match_info["token"])
+        chat_id, message_id, user_id = decode_stream_token(request.match_info["token"])
+        if await db.is_user_banned(user_id):
+            raise web.HTTPForbidden(text="Access denied.")
         secure_hash = request.rel_url.query.get("hash", "")
-        html = await render_watch_page(chat_id, message_id, secure_hash)
+        html = await render_watch_page(chat_id, message_id, secure_hash, user_id)
         return web.Response(text=html, content_type="text/html")
     except InvalidStreamHash as e:
         raise web.HTTPForbidden(text=e.message)
