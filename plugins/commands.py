@@ -42,7 +42,7 @@ def formate_file_name(file_name):
     return file_name
 
 
-def stream_download_buttons(chat_id, message_id, media):
+def stream_download_buttons(chat_id, message_id, media, user_id):
     """Fast Download / Watch Online buttons only for supported file types."""
     if not STREAM_MODE:
         return []
@@ -63,6 +63,7 @@ def stream_download_buttons(chat_id, message_id, media):
             message_id,
             getattr(media, "file_unique_id", ""),
             file_name,
+            user_id,
         )
 
         return [[
@@ -398,7 +399,7 @@ async def start(client, message):
                         for b in row
                     ])
 
-                button.extend(stream_download_buttons(channel_id, msgid, file))
+                button.extend(stream_download_buttons(channel_id, msgid, file, message.from_user.id))
                 reply_markup = InlineKeyboardMarkup(button)
                 protect = settings.get("protect_content", False)
 
@@ -605,7 +606,8 @@ async def start(client, message):
                         stream_download_buttons(
                             msg.chat.id,
                             msg.id,
-                            media
+                            media,
+                            message.from_user.id
                         )
                     )
 
