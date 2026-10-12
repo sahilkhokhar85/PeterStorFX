@@ -143,7 +143,7 @@ async def _delete_batch_later(delay, filesarr, notice):
         notice._client, delay, notice.chat.id,
         [x.id for x in filesarr if x],
         notice.id,
-        "<b>Your All Files/Videos is Successfully Deleted!!!</b>",
+        "<b>Your All Files/Videos Are Successfully Deleted !!</b>",
     )
 
 
@@ -153,7 +153,7 @@ async def _delete_single_later(delay, del_msg, notice):
         notice._client, delay, notice.chat.id,
         [del_msg.id],
         notice.id,
-        "<b>Your File/Video is successfully deleted!!!</b>",
+        "<b>Your File/Video Is Successfully Deleted !!</b>",
     )
 
 
