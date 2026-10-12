@@ -61,6 +61,7 @@
 | `WEBSITE_URL_MODE` | `True` / `False`: permanent links through the website |
 | `WEBSITE_URL` | Your redirect website URL, only if `WEBSITE_URL_MODE` is `True` |
 | `STREAM_MODE` | `True` / `False`: Fast Download / Watch Online buttons on delivered files |
+| `STREAM_SECRET` | Optional secret for signing links (if empty, derived from `BOT_TOKEN`) |
 | `URL` | Your server app link with `https://` and one `/` at the end (also used for Fast Download / Watch Online links) |
 
 ### Auto delete and hosting
