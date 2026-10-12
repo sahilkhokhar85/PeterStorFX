@@ -51,6 +51,8 @@ WEBSITE_URL = environ.get("WEBSITE_URL", "")
 # Fast Download / Watch Online Info:
 STREAM_MODE = is_enabled(environ.get('STREAM_MODE', "True"), True) # Set True or False
 # Uses the URL variable below as the public base URL for stream/download links.
+# Every stream/download link is signed and tied to the user it was made for (no expiry).
+STREAM_SECRET = environ.get("STREAM_SECRET", "")  # optional; if empty it is derived from BOT_TOKEN
 
 PING_INTERVAL = int(environ.get("PING_INTERVAL", "1200"))  # 20 minutes
 if 'DYNO' in environ:
