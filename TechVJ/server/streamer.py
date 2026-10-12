@@ -4,6 +4,8 @@ Fast Download / Watch Online streaming support.
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import logging
 import math
 import mimetypes
@@ -16,7 +18,7 @@ from pyrogram.errors import AuthBytesInvalid
 from pyrogram.file_id import FileId
 from pyrogram.session import Auth, Session
 
-from config import URL
+from config import BOT_TOKEN, STREAM_SECRET, URL
 
 logger = logging.getLogger(__name__)
 
@@ -32,15 +34,40 @@ class InvalidStreamHash(Exception):
     message = "Invalid or expired link."
 
 
-def encode_stream_token(chat_id: int, message_id: int) -> str:
-    raw_token = f"{chat_id}:{message_id}".encode("ascii")
-    return base64.urlsafe_b64encode(raw_token).decode("ascii").rstrip("=")
+def _secret() -> bytes:
+    # STREAM_SECRET if set, otherwise derived from BOT_TOKEN (no new variable needed).
+    base = STREAM_SECRET or ("stream-link:" + BOT_TOKEN)
+    return hashlib.sha256(base.encode("utf-8")).digest()
 
 
-def decode_stream_token(token: str) -> Tuple[int, int]:
-    padded = token + "=" * (-len(token) % 4)
-    chat_id_str, message_id_str = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii").split(":", 1)
-    return int(chat_id_str), int(message_id_str)
+def _sign(payload: str) -> str:
+    digest = hmac.new(_secret(), payload.encode("ascii"), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest[:12]).decode("ascii").rstrip("=")
+
+
+def encode_stream_token(chat_id: int, message_id: int, user_id: int) -> str:
+    """Signed link token: chat:msg:user + HMAC. The links do not expire, but they
+    are tied to the user they were made for, so the web server can refuse a
+    banned user and nobody can forge a link for another user or file."""
+    raw_token = f"{chat_id}:{message_id}:{int(user_id)}".encode("ascii")
+    payload = base64.urlsafe_b64encode(raw_token).decode("ascii").rstrip("=")
+    return f"{payload}.{_sign(payload)}"
+
+
+def decode_stream_token(token: str) -> Tuple[int, int, int]:
+    """Returns (chat_id, message_id, user_id). Raises InvalidStreamHash for a
+    forged, tampered or old-format token."""
+    try:
+        payload, _, sig = token.partition(".")
+        if not payload or not sig or not hmac.compare_digest(sig, _sign(payload)):
+            raise InvalidStreamHash
+        padded = payload + "=" * (-len(payload) % 4)
+        chat_s, msg_s, uid_s = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii").split(":", 2)
+        return int(chat_s), int(msg_s), int(uid_s)
+    except InvalidStreamHash:
+        raise
+    except Exception:
+        raise InvalidStreamHash
 
 
 def get_media_from_message(message) -> Any:
@@ -55,8 +82,7 @@ def get_hash(media) -> str:
     return (getattr(media, "file_unique_id", "") or "")[:6]
 
 
-def _dl_url(chat_id: int, message_id: int, file_unique_id: str, file_name: str, force_download: bool) -> str:
-    token = encode_stream_token(chat_id, message_id)
+def _dl_url(token: str, file_unique_id: str, file_name: str, force_download: bool) -> str:
     secure_hash = (file_unique_id or "")[:6]
     safe_name = urllib.parse.quote(file_name or "file")
     base = URL if URL.endswith("/") else URL + "/"
@@ -66,9 +92,10 @@ def _dl_url(chat_id: int, message_id: int, file_unique_id: str, file_name: str, 
     return f"{base}dl/{token}/{safe_name}?{query}"
 
 
-def build_stream_urls(chat_id: int, message_id: int, file_unique_id: str, file_name: str) -> Tuple[str, str]:
-    download_url = _dl_url(chat_id, message_id, file_unique_id, file_name, force_download=True)
-    token = encode_stream_token(chat_id, message_id)
+def build_stream_urls(chat_id: int, message_id: int, file_unique_id: str, file_name: str,
+                      user_id: int) -> Tuple[str, str]:
+    token = encode_stream_token(chat_id, message_id, user_id)
+    download_url = _dl_url(token, file_unique_id, file_name, force_download=True)
     secure_hash = (file_unique_id or "")[:6]
     base = URL if URL.endswith("/") else URL + "/"
     watch_url = f"{base}watch/{token}?hash={secure_hash}"
@@ -367,19 +394,16 @@ async def stream_media(request: web.Request, chat_id: int, message_id: int, secu
     return response
 
 
-async def render_watch_page(chat_id: int, message_id: int, secure_hash: str) -> str:
+async def render_watch_page(chat_id: int, message_id: int, secure_hash: str, user_id: int) -> str:
     streamer = get_streamer()
     file_id = await streamer.get_file_properties(chat_id, message_id)
 
     if file_id.unique_id[:6] != secure_hash:
         raise InvalidStreamHash
 
-    download_url, _watch_url = build_stream_urls(
-        chat_id, message_id, file_id.unique_id, file_id.file_name
-    )
-    inline_url = _dl_url(
-        chat_id, message_id, file_id.unique_id, file_id.file_name, force_download=False
-    )
+    token = encode_stream_token(chat_id, message_id, user_id)
+    download_url = _dl_url(token, file_id.unique_id, file_id.file_name, force_download=True)
+    inline_url = _dl_url(token, file_id.unique_id, file_id.file_name, force_download=False)
     mime_type = file_id.mime_type or ""
     file_name = (file_id.file_name or "file").replace("_", " ")
     file_size = humanbytes(file_id.file_size)
