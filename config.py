@@ -30,7 +30,7 @@ DB_NAME = environ.get("DB_NAME", "")
 AUTO_DELETE_MODE = is_enabled(environ.get('AUTO_DELETE_MODE', "True"), True) # Set True or False
 
 # If Auto Delete Mode Is True, AUTO_DELETE_TIME below is the delay.
-AUTO_DELETE_TIME = int(environ.get("AUTO_DELETE_TIME", "300")) # Time in Seconds
+AUTO_DELETE_TIME = int(environ.get("AUTO_DELETE_TIME", "60")) # Time in Seconds
 
 # Channel Information
 LOG_CHANNEL = int(environ.get("LOG_CHANNEL", ""))
