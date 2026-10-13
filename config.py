@@ -33,7 +33,11 @@ AUTO_DELETE_MODE = is_enabled(environ.get('AUTO_DELETE_MODE', "True"), True) # S
 AUTO_DELETE_TIME = int(environ.get("AUTO_DELETE_TIME", "1800")) # Time in Seconds
 
 # Channel Information
+# LOG_CHANNEL = the DATABASE channel: only the stored files (and batch json) live here.
 LOG_CHANNEL = int(environ.get("LOG_CHANNEL", ""))
+# REPORT_CHANNEL = reports only: new user, file access, bot restart, delivery errors.
+# Optional: if it is not set, reports go to LOG_CHANNEL like before.
+REPORT_CHANNEL = int(environ.get("REPORT_CHANNEL") or LOG_CHANNEL)
 
 # File Caption Information
 CUSTOM_FILE_CAPTION = environ.get("CUSTOM_FILE_CAPTION", f"{script.CAPTION}")
