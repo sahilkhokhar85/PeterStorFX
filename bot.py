@@ -13,7 +13,7 @@ logging.config.fileConfig('logging.conf')
 logging.getLogger().setLevel(logging.INFO)
 logging.getLogger("pyrogram").setLevel(logging.ERROR)
 
-from config import LOG_CHANNEL, ON_HEROKU, PORT
+from config import REPORT_CHANNEL, ON_HEROKU, PORT
 from Script import script
 from TechVJ.bot import StreamBot
 from TechVJ.server import web_server
@@ -74,10 +74,10 @@ async def start():
     now = datetime.now(tz)
     time = now.strftime("%H:%M:%S %p")
     try:
-        await StreamBot.send_message(chat_id=LOG_CHANNEL, text=script.RESTART_TXT.format(today, time))
+        await StreamBot.send_message(chat_id=REPORT_CHANNEL, text=script.RESTART_TXT.format(today, time))
     except Exception as e:
         # A problem with the log channel must not take the whole bot down.
-        logging.warning(f"Couldn't send the restart message to LOG_CHANNEL: {type(e).__name__}: {e}")
+        logging.warning(f"Couldn't send the restart message to REPORT_CHANNEL: {type(e).__name__}: {e}")
     print("Bot Started Successfully!")
     await idle()
 
