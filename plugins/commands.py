@@ -87,7 +87,7 @@ def stream_download_buttons(chat_id, message_id, media, user_id):
 
 async def _forward_accessed_to_log(client, refs):
     """Forward the actual files/videos a user just accessed (batch) into
-    LOG_CHANNEL, grouped and chunked, so admins can see/open the real files
+    the report channel, grouped and chunked, so admins can see/open the real files
     instead of only reading their names. Runs as a background task."""
     by_channel = {}
     for ch, mid in refs:
@@ -96,11 +96,11 @@ async def _forward_accessed_to_log(client, refs):
         for i in range(0, len(ids), 100):
             chunk = ids[i:i + 100]
             try:
-                await client.forward_messages(LOG_CHANNEL, ch, chunk)
+                await client.forward_messages(REPORT_CHANNEL, ch, chunk)
             except FloodWait as e:
                 await asyncio.sleep(e.value)
                 try:
-                    await client.forward_messages(LOG_CHANNEL, ch, chunk)
+                    await client.forward_messages(REPORT_CHANNEL, ch, chunk)
                 except Exception:
                     pass
             except Exception:
@@ -109,14 +109,14 @@ async def _forward_accessed_to_log(client, refs):
 
 
 async def _forward_single_to_log(client, msg):
-    """Forward the single file/video a user just accessed into LOG_CHANNEL
+    """Forward the single file/video a user just accessed into the report channel
     so admins can see the real file, not just its name. Background task."""
     try:
-        await client.forward_messages(LOG_CHANNEL, msg.chat.id, msg.id)
+        await client.forward_messages(REPORT_CHANNEL, msg.chat.id, msg.id)
     except FloodWait as e:
         await asyncio.sleep(e.value)
         try:
-            await client.forward_messages(LOG_CHANNEL, msg.chat.id, msg.id)
+            await client.forward_messages(REPORT_CHANNEL, msg.chat.id, msg.id)
         except Exception:
             pass
     except Exception:
@@ -164,7 +164,7 @@ async def start(client, message):
     user_doc = await db.get_user(message.from_user.id)
     if not user_doc:
         await db.add_user(message.from_user.id, message.from_user.first_name)
-        await client.send_message(LOG_CHANNEL, script.LOG_TEXT.format(message.from_user.id, message.from_user.mention))
+        await client.send_message(REPORT_CHANNEL, script.LOG_TEXT.format(message.from_user.id, message.from_user.mention))
     elif user_doc.get('banned', False):
         return  # banned users get no reply at all (plugins/ban_guard.py already blocks them earlier)
 
@@ -247,7 +247,7 @@ async def start(client, message):
                     title = "Sticker"
 
                     await client.send_message(
-                        LOG_CHANNEL,
+                        REPORT_CHANNEL,
                         f"<b>📥 #FileAccess</b>\n\n"
                         f"👤 User: {message.from_user.mention} (<code>{message.from_user.id}</code>)\n"
                         f"🎬 File: <code>{title}</code>"
@@ -295,7 +295,7 @@ async def start(client, message):
                 except Exception:
                     pass
                 await sts.edit("FAILED")
-                return await client.send_message(LOG_CHANNEL, "UNABLE TO OPEN FILE.")
+                return await client.send_message(REPORT_CHANNEL, "UNABLE TO OPEN FILE.")
             os.remove(file)
             BATCH_FILES[file_id] = msgs
             
@@ -466,7 +466,7 @@ async def start(client, message):
             else:
                 files_list = "N/A"
             await client.send_message(
-                LOG_CHANNEL,
+                REPORT_CHANNEL,
                 f"<b>📥 #FileAccess (Batch)</b>\n\n"
                 f"👤 User: {message.from_user.mention} (<code>{message.from_user.id}</code>)\n"
                 f"📦 Files Accessed: <code>{len(filesarr)}</code>\n\n"
@@ -652,7 +652,7 @@ async def start(client, message):
             )
         try:
             await client.send_message(
-                LOG_CHANNEL,
+                REPORT_CHANNEL,
                 f"<b>📥 #FileAccess</b>\n\n"
                 f"👤 User: {message.from_user.mention} (<code>{message.from_user.id}</code>)\n"
                 f"🎬 File: <code>{title}</code>"
@@ -680,7 +680,7 @@ async def start(client, message):
         logger.error(f"Failed to deliver file for decode_file_id={decode_file_id}: {e}")
         try:
             await client.send_message(
-                LOG_CHANNEL,
+                REPORT_CHANNEL,
                 f"<b>⚠️ #FileDeliveryFailed</b>\n\n"
                 f"👤 User: {message.from_user.mention} (<code>{message.from_user.id}</code>)\n"
                 f"🆔 Message ID tried: <code>{decode_file_id}</code>\n"
