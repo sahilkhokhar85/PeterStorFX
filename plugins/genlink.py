@@ -10,6 +10,7 @@ import traceback
 from datetime import datetime, timezone
 
 from pyrogram import filters, Client, enums
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pyrogram.errors import FloodWait
 from pyrogram.errors.exceptions.bad_request_400 import (
     ChannelInvalid,
@@ -240,31 +241,22 @@ def reply_link_text(permanent_link, share_link):
     )
 
 
-# ============================================================
-# AUTOMATIC FILE LINK GENERATION
-# ============================================================
-
-@Client.on_message(
-    (filters.document | filters.video | filters.audio)
-    & filters.private
-    & filters.create(allowed)
-)
-async def incoming_gen_link(bot, message):
-    cache_key = get_message_cache_key(message)
+async def build_link_reply(source_message):
+    """Create (or reuse) the link for one media message and return the reply
+    text. This is the only place that copies a file into LOG_CHANNEL."""
+    cache_key = get_message_cache_key(source_message)
     saved = await get_saved_link(cache_key)
 
     if saved and saved.get("permanent_url"):
-        return await message.reply(
-            reply_link_text(
-                saved["permanent_url"],
-                saved.get("share_link", ""),
-            )
+        return reply_link_text(
+            saved["permanent_url"],
+            saved.get("share_link", ""),
         )
 
     if saved and saved.get("share_link"):
         share_link = saved["share_link"]
     else:
-        post = await copy_keep_cover(message, LOG_CHANNEL)
+        post = await copy_keep_cover(source_message, LOG_CHANNEL)
         share_link = make_file_share_link(post.id)
 
     permanent_link, share_link = await get_or_create_link(
@@ -272,9 +264,85 @@ async def incoming_gen_link(bot, message):
         share_link,
     )
 
+    return reply_link_text(permanent_link, share_link)
+
+
+# ============================================================
+# FILE SENT TO THE BOT: ASK FIRST, THEN GENERATE
+# ============================================================
+# A file sent to the bot is NOT copied into LOG_CHANNEL automatically any
+# more. The bot asks first, so files sent for other reasons (for example a
+# .txt id list for /ban) never create a link or a log copy.
+
+@Client.on_message(
+    (filters.document | filters.video | filters.audio)
+    & filters.private
+    & filters.create(allowed)
+)
+async def incoming_gen_link(bot, message):
+    # A file sent together with a command caption (e.g. "/ban" + id list)
+    # is meant for that command, so never ask about it.
+    caption = (message.caption or "").lstrip()
+    if caption.startswith("/"):
+        return
+
     await message.reply(
-        reply_link_text(permanent_link, share_link)
+        bold("Generate A Link For This File?"),
+        quote=True,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "✅ Generate Link",
+                callback_data=f"gl_yes:{message.id}",
+            ),
+            InlineKeyboardButton(
+                "❌ Cancel",
+                callback_data=f"gl_no:{message.id}",
+            ),
+        ]]),
     )
+
+
+@Client.on_callback_query(filters.regex(r"^gl_(yes|no):\d+$"))
+async def gen_link_answer(bot, query):
+    user_id = query.from_user.id
+
+    if await db.is_user_banned(user_id) or not (
+        user_id in ADMINS or await is_admin(user_id)
+    ):
+        return await query.answer("Not allowed.", show_alert=True)
+
+    action, _, msg_id = query.data.partition(":")
+    prompt = query.message
+
+    if action == "gl_no":
+        await query.answer("Cancelled.")
+        return await prompt.edit_text(bold("Cancelled. No Link Was Created."))
+
+    # Edit first so a double tap cannot create two links.
+    await query.answer("Generating...")
+    try:
+        await prompt.edit_text(bold("⏳ Generating Your Link..."))
+    except Exception:
+        return
+
+    try:
+        source = await bot.get_messages(prompt.chat.id, int(msg_id))
+        if not source or source.empty:
+            return await prompt.edit_text(
+                bold("❌ That File Is No Longer Available. Send It Again.")
+            )
+        text = await build_link_reply(source)
+    except FloodWait as e:
+        return await prompt.edit_text(
+            bold(f"❌ Telegram Is Busy. Try Again In {int(e.value)} Seconds.")
+        )
+    except Exception as e:
+        print(f"GEN LINK ERROR: {type(e).__name__}: {e}")
+        return await prompt.edit_text(
+            bold("❌ Could Not Create The Link. Please Try Again.")
+        )
+
+    await prompt.edit_text(text)
 
 
 # ============================================================
@@ -292,31 +360,7 @@ async def gen_link_s(bot, message):
             bold("Reply to a message to get a shareable link.")
         )
 
-    cache_key = get_message_cache_key(replied)
-    saved = await get_saved_link(cache_key)
-
-    if saved and saved.get("permanent_url"):
-        return await message.reply(
-            reply_link_text(
-                saved["permanent_url"],
-                saved.get("share_link", ""),
-            )
-        )
-
-    if saved and saved.get("share_link"):
-        share_link = saved["share_link"]
-    else:
-        post = await copy_keep_cover(replied, LOG_CHANNEL)
-        share_link = make_file_share_link(post.id)
-
-    permanent_link, share_link = await get_or_create_link(
-        cache_key,
-        share_link,
-    )
-
-    await message.reply(
-        reply_link_text(permanent_link, share_link)
-    )
+    await message.reply(await build_link_reply(replied))
 
 
 # ============================================================
