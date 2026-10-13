@@ -52,7 +52,8 @@
 | `DB_URI` | MongoDB connection URL for the main bot |
 | `DB_NAME` | MongoDB database name |
 | `ADMINS` | Admin / owner ids, space separated (also allowed to broadcast) |
-| `LOG_CHANNEL` | Log channel id, starts with `-100` |
+| `LOG_CHANNEL` | Database channel id (starts with `-100`): stored files and batch data only |
+| `REPORT_CHANNEL` | Reports channel id (starts with `-100`): new users, file access, restarts, errors. Optional, if empty reports go to `LOG_CHANNEL` |
 
 ### Links and website
 
