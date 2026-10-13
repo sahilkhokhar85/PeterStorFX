@@ -272,7 +272,7 @@ async def build_link_reply(source_message):
 # ============================================================
 # A file sent to the bot is NOT copied into LOG_CHANNEL automatically any
 # more. The bot asks first, so files sent for other reasons (for example a
-# .txt id list for /ban) never create a link or a log copy.
+# .txt id list you then reply /ban to) never create a link or a log copy.
 
 @Client.on_message(
     (filters.document | filters.video | filters.audio)
@@ -280,12 +280,6 @@ async def build_link_reply(source_message):
     & filters.create(allowed)
 )
 async def incoming_gen_link(bot, message):
-    # A file sent together with a command caption (e.g. "/ban" + id list)
-    # is meant for that command, so never ask about it.
-    caption = (message.caption or "").lstrip()
-    if caption.startswith("/"):
-        return
-
     await message.reply(
         bold("Generate A Link For This File?"),
         quote=True,
