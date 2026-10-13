@@ -469,6 +469,7 @@ async def fetch_batch_messages(
     status,
 ):
     outlist = []
+    originals = {}
     total = last_id - first_id + 1
     processed = 0
 
@@ -506,6 +507,7 @@ async def fetch_batch_messages(
                 "channel_id": chat_id,
                 "msg_id": msg_id,
             })
+            originals[msg_id] = msg
 
         processed += len(ids)
 
@@ -521,7 +523,110 @@ async def fetch_batch_messages(
             pass
 
     print(f"BATCH COLLECTED: {len(outlist)}")
-    return outlist
+    return outlist, originals
+
+
+# ============================================================
+# BATCH FILES LIVE IN THE LOG CHANNEL (the database)
+# ============================================================
+# A batch made from any other channel is first copied into LOG_CHANNEL and the
+# batch link points to those copies. So the link keeps working even if the
+# source channel is deleted, restricted or the bot loses access to it.
+
+FORWARD_CHUNK = 100   # Telegram forwards at most 100 messages per call
+
+
+def _content_id(msg):
+    """Something that stays the same between a message and its copy."""
+    media = getattr(msg, "media", None)
+    if media:
+        obj = getattr(msg, media.value, None)
+        uid = getattr(obj, "file_unique_id", None)
+        if uid:
+            return ("media", uid)
+    return ("text", (getattr(msg, "text", None) or getattr(msg, "caption", None) or ""))
+
+
+async def _forward_chunk(bot, from_chat, ids):
+    while True:
+        try:
+            res = await bot.forward_messages(
+                chat_id=LOG_CHANNEL,
+                from_chat_id=from_chat,
+                message_ids=ids,
+                drop_author=True,
+            )
+            return res if isinstance(res, list) else [res]
+        except FloodWait as e:
+            await asyncio.sleep(int(e.value) + 1)
+
+
+async def _copy_one(bot, original):
+    while True:
+        try:
+            return await copy_keep_cover(original, LOG_CHANNEL)
+        except FloodWait as e:
+            await asyncio.sleep(int(e.value) + 1)
+        except Exception as e:
+            print(f"BATCH COPY ERROR: {type(e).__name__}: {e}")
+            return None
+
+
+async def copy_batch_to_log(bot, outlist, originals, status):
+    """Copy every batch message into LOG_CHANNEL. Returns (new_outlist, kept)
+    where `kept` counts messages that could not be copied (they keep pointing
+    at the source channel so the batch still works)."""
+    if not outlist:
+        return outlist, 0
+
+    source_chat = outlist[0]["channel_id"]
+    result = []
+    kept = 0
+
+    for start in range(0, len(outlist), FORWARD_CHUNK):
+        chunk = outlist[start:start + FORWARD_CHUNK]
+        ids = [entry["msg_id"] for entry in chunk]
+        copies = None
+
+        # Fast path: one forward call per 100 messages (keeps covers, captions, albums).
+        try:
+            res = await _forward_chunk(bot, source_chat, ids)
+            ok = len(res) == len(chunk) and all(
+                _content_id(originals[i]) == _content_id(c)
+                for i, c in zip(ids, res)
+            )
+            if ok:
+                copies = res
+            else:
+                # Not a clean one-to-one result: undo it and copy one by one.
+                try:
+                    await bot.delete_messages(LOG_CHANNEL, [m.id for m in res])
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"BATCH FORWARD ERROR: {type(e).__name__}: {e}")
+
+        if copies is None:
+            copies = [await _copy_one(bot, originals[i]) for i in ids]
+
+        for entry, copy in zip(chunk, copies):
+            if copy:
+                result.append({"channel_id": LOG_CHANNEL, "msg_id": copy.id})
+            else:
+                result.append(entry)
+                kept += 1
+
+        try:
+            await status.edit(
+                bold(
+                    "⏳ Saving files to the database channel...\n\n"
+                    f"Done: {len(result)}/{len(outlist)}"
+                )
+            )
+        except Exception:
+            pass
+
+    return result, kept
 
 
 # ============================================================
@@ -629,7 +734,7 @@ async def gen_link_batch(bot, message):
             )
         )
 
-        outlist = await fetch_batch_messages(
+        outlist, originals = await fetch_batch_messages(
             bot,
             first_chat_id,
             first_msg_id,
@@ -643,6 +748,14 @@ async def gen_link_batch(bot, message):
                     "❌ No messages found in this range. "
                     "Check the message IDs and bot's channel access."
                 )
+            )
+
+        # Files must live in the log channel, not in the source channel.
+        kept = 0
+        source_id = (await bot.get_chat(first_chat_id)).id
+        if int(source_id) != int(LOG_CHANNEL):
+            outlist, kept = await copy_batch_to_log(
+                bot, outlist, originals, status
             )
 
         filename = f"batchmode_{message.from_user.id}.json"
@@ -674,10 +787,18 @@ async def gen_link_batch(bot, message):
             share_link,
         )
 
+        warning = ""
+        if kept:
+            warning = (
+                f"⚠️ {kept} message(s) could not be copied to the database "
+                "channel and still come from the source channel.\n\n"
+            )
+
         if permanent_link:
             final_text = (
                 "<b>⭕ Here is your link:\n\n"
                 f"Contains {len(outlist)} messages.\n\n"
+                f"{warning}"
                 f"🔗 Permanent link: "
                 f"{html.escape(permanent_link)}</b>"
             )
@@ -685,6 +806,7 @@ async def gen_link_batch(bot, message):
             final_text = (
                 "<b>⭕ Here is your link:\n\n"
                 f"Contains {len(outlist)} messages.\n\n"
+                f"{warning}"
                 f"🔗 Original link: "
                 f"{html.escape(share_link)}</b>"
             )
