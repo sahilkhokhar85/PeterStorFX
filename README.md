@@ -78,6 +78,20 @@ If `URL` is empty, Railway's `RAILWAY_PUBLIC_DOMAIN` is used.
 
 </details>
 
+## 🤖🤖 Running Several Bots
+
+The same code can run as many bots as you like (one Railway service per bot, one BotFather token each).
+Visitors who open a permanent link are sent to a **random** bot from your list by the Cloudflare Worker.
+
+Every bot needs the **same** values for: `API_ID`, `API_HASH`, `ADMINS`, `DB_URI`, `DB_NAME`, `LOG_CHANNEL`, `REPORT_CHANNEL`, `WEBSITE_URL`, `PERMANENT_LINK_WORKER_URL`, `PERMANENT_LINK_ADMIN_KEY`.
+Every bot needs its **own**: `BOT_TOKEN`, `BOT_USERNAME`, `URL` (its own Railway domain).
+
+- Add every bot as an admin in `LOG_CHANNEL`, `REPORT_CHANNEL` and your force-sub channels.
+- Bans are shared: a `/ban` on one bot reaches the others within about 15 seconds.
+- Users and auto-delete jobs are kept per bot, so a broadcast only reaches the people who started that bot.
+- Reports in `REPORT_CHANNEL` end with the name of the bot they came from.
+- In the Worker, set the `BOT_USERNAMES` variable, for example `bot_one bot_two bot_three` (no @).
+
 ## 🤖 Commands
 
 <details>
