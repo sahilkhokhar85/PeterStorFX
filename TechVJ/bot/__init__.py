@@ -6,7 +6,7 @@ class StreamXBot(Client):
 
     def __init__(self):
         super().__init__(
-            name="vjfiletolink",
+            name=f"vjfiletolink_{BOT_ID}",
             api_id=API_ID,
             api_hash=API_HASH,
             bot_token=BOT_TOKEN,
@@ -14,6 +14,15 @@ class StreamXBot(Client):
             plugins={"root": "plugins"},
             sleep_threshold=10,
         )
+    async def send_message(self, chat_id, text=None, *args, **kwargs):
+        """Reports go to one shared REPORT_CHANNEL, so with several bots every
+        report is signed with the bot it came from."""
+        if chat_id == REPORT_CHANNEL and isinstance(text, str):
+            username = getattr(self.me, "username", None) if getattr(self, "me", None) else None
+            if username:
+                text = f"{text}\n\n<b>🤖 Bot:</b> @{username}"
+        return await super().send_message(chat_id, text, *args, **kwargs)
+
     async def iter_messages(
         self,
         chat_id: Union[int, str],
