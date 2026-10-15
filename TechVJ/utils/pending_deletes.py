@@ -14,6 +14,7 @@ import logging
 import time
 
 from pyrogram.errors import FloodWait
+from config import BOT_ID
 from plugins.dbusers import db
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ async def run_delete(client, delay, chat_id, ids, notice_id, notice_text):
     """Called when files are delivered: save the job in MongoDB, wait, then delete.
     If MongoDB is unreachable the delete still happens (in memory only)."""
     entry = {
+        "bot_id": BOT_ID,   # several bots share this collection: each one only touches its own jobs
         "chat_id": int(chat_id),
         "ids": [int(i) for i in ids],
         "notice_id": int(notice_id) if notice_id else None,
@@ -103,7 +105,7 @@ async def restore_pending_deletes(client):
             await _col().create_index("delete_at")
         except Exception:
             pass
-        entries = await _col().find({}).to_list(length=None)
+        entries = await _col().find({"bot_id": BOT_ID}).to_list(length=None)
     except Exception as e:
         logger.warning(f"[AUTODEL] couldn't load pending deletes: {type(e).__name__}: {e}")
         return 0
