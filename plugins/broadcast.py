@@ -568,7 +568,19 @@ def _part_line(part):
     return line + (" · " + " ".join(extra) if extra else "")
 
 
-def _all_text(job, final, detail=False):
+def _part_full(part):
+    """Per-bot block for the final result: the same numbers as the summary, for one bot."""
+    state = part.get("state")
+    name = "@" + html.escape(part.get("username") or "?")
+    if state != "done":
+        return _part_line(part)
+    ok = int(part["success"] * 100 / part["total"]) if part["total"] else 0
+    return (f"✅ <b>{name}</b>\n"
+            f"   👥 {part['total']} · ✅ {part['success']} ({ok}%) · "
+            f"🚫 {part['blocked']} · 🗑 {part['deleted']} · ❌ {part['failed']}")
+
+
+def _all_text(job, final, detail=True):
     parts = list(job["parts"].values())
     total = {k: sum(p.get(k, 0) for p in parts) for k in _ZERO}
     bar, pct = _bar(total["done"], total["total"])
@@ -599,7 +611,7 @@ def _all_text(job, final, detail=False):
         bad = sum(1 for p in parts if p["state"] in ("skipped", "lost", "failed"))
         text += f"\n\n⚠️ {bad} Bot(s) Did Not Finish — Tap Bot-wise"
     if detail:
-        text += "\n\n<b>🤖 BOT-WISE</b>\n" + "\n".join(_part_line(p) for p in parts)
+        text += "\n\n<b>🤖 BOT-WISE</b>\n" + "\n\n".join(_part_full(p) for p in parts)
     return text
 
 
@@ -654,11 +666,11 @@ async def _watch_job(bot, sts, token):
             if final:
                 job["finished"] = time.time()
                 await _jobs().update_one({"_id": token}, {"$set": {"finished": job["finished"]}})
-            text = _all_text(job, final)
+            text = _all_text(job, final, True)
             if text != last:
                 last = text
                 try:
-                    await sts.edit_text(text, reply_markup=_final_markup(token, False) if final else None)
+                    await sts.edit_text(text, reply_markup=_final_markup(token, True) if final else None)
                 except Exception:
                     pass
             if final:
