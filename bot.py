@@ -64,6 +64,9 @@ async def start():
     asyncio.create_task(run_watchdog(StreamBot))
     # Files that were due for auto-delete while the bot was down / restarting
     asyncio.create_task(restore_pending_deletes(StreamBot))
+    # Heartbeat + this bot's part of "All Bots" broadcasts (plugins/broadcast.py)
+    from plugins.broadcast import cross_bot_loop
+    asyncio.create_task(cross_bot_loop(StreamBot))
     # NOTE: plugins are already loaded by Pyrogram itself (plugins={"root": "plugins"}
     # in TechVJ/bot/__init__.py) when StreamBot.start() runs above. The old manual
     # importlib loop re-executed every plugin a second time (duplicate Mongo clients).
