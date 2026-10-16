@@ -2,12 +2,16 @@ from pyrogram.errors import InputUserDeactivated, UserNotParticipant, FloodWait,
 from plugins.dbusers import db
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from config import ADMINS
+from config import ADMINS, BOT_ID, REPORT_CHANNEL
 from plugins.admins_db import dynamic_admin_filter
 import asyncio
 import datetime
+import html
+import logging
 import secrets
 import time
+
+logger = logging.getLogger(__name__)
 
 # How many users we message at once. Telegram's flood limits are mostly
 # per-chat, so sending to many *different* users concurrently is safe and
@@ -21,6 +25,8 @@ CONCURRENCY = 25
 #   2. /done       -> bot sends you a PREVIEW of everything, in order, with Confirm / Cancel
 #   3. only Confirm starts the broadcast.   /cancel at any time stops everything.
 #   /broadcast as a REPLY to a message (or album) skips step 1-2 and goes straight to the preview.
+#   At the preview you choose: "This Bot Only", or "All Bots" (every bot that shares this
+#   database sends it to ITS OWN users, one click for all of them - see the end of this file).
 #
 # /send <user_id> works exactly the same way, but the messages go ONLY to that one user.
 IDLE_SECONDS = 600        # the bot stops waiting if you send nothing for 10 minutes
@@ -130,22 +136,35 @@ async def _make_preview(bot, admin_id, chat_id, units, target=None):
     what = "1 Message" if n == 1 and len(units[0]) == 1 else (
         f"1 Album Of {len(units[0])} Items" if n == 1 else f"{n} Messages")
     order = " In This Order" if n > 1 else ""
+    buttons = []
+    extra = ""
     if target:
         who = f"ONLY To User <code>{target}</code>"
         ask = "Is This Exactly What You Want To Send?"
-        yes = "✅ Confirm Send"
+        buttons.append(InlineKeyboardButton("✅ Confirm Send", callback_data=f"bc_yes:{token}"))
     else:
-        who = f"To {len(await _target_user_ids())} Users"
+        who = f"To {len(await _target_user_ids())} Users Of This Bot"
         ask = "Is This Exactly What You Want To Broadcast?"
-        yes = "✅ Confirm Broadcast"
+        buttons.append(InlineKeyboardButton("✅ This Bot Only", callback_data=f"bc_yes:{token}"))
+        try:
+            online, offline = await _online_bots()
+        except Exception:
+            online, offline = [], []
+        if len(online) > 1:
+            lines = []
+            for d in online:
+                count = await db.col.count_documents({"bot_id": d["_id"]})
+                lines.append(f"• @{html.escape(str(d.get('username') or d['_id']))} — {count} Users")
+            extra = "\n\n<b>📣 All Bots (Online Now):</b>\n" + "\n".join(lines)
+            if offline:
+                extra += "\n<b>Offline (Will Be Skipped):</b> " + ", ".join(
+                    "@" + html.escape(str(d.get("username") or d["_id"])) for d in offline)
+            buttons.append(InlineKeyboardButton(f"📣 All Bots ({len(online)})", callback_data=f"bc_all:{token}"))
     await bot.send_message(
         chat_id,
-        f"<b>👆 Preview: {what} Will Be Sent {who}{order}.</b>\n\n"
+        f"<b>👆 Preview: {what} Will Be Sent {who}{order}.</b>{extra}\n\n"
         f"<b>{ask}</b>",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton(yes, callback_data=f"bc_yes:{token}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"bc_no:{token}"),
-        ]]),
+        reply_markup=InlineKeyboardMarkup([buttons, [InlineKeyboardButton("❌ Cancel", callback_data=f"bc_no:{token}")]]),
     )
 
 
@@ -277,7 +296,7 @@ async def _capture_broadcast_message(bot, message):
     message.stop_propagation()
 
 
-@Client.on_callback_query(filters.regex(r"^bc_(yes|no):[0-9a-f]{8}$") & dynamic_admin_filter("can_broadcast"))
+@Client.on_callback_query(filters.regex(r"^bc_(yes|all|no):[0-9a-f]{8}$") & dynamic_admin_filter("can_broadcast"))
 async def broadcast_answer(bot, query):
     action, _, token = query.data.partition(":")
     job = _JOBS.get(token)
@@ -296,6 +315,19 @@ async def broadcast_answer(bot, query):
         _JOBS.pop(token, None)
         await query.answer("Cancelled.")
         return await query.message.edit_text("<b>❌ Cancelled. Nothing Was Sent.</b>")
+
+    if action == "bc_all":
+        if job.get("target"):
+            return await query.answer("A single-user send can't go to all bots.", show_alert=True)
+        try:
+            running = await _jobs().find_one({"status": "running"})
+        except Exception:
+            running = None
+        if running:
+            return await query.answer("An all-bots broadcast is already running. Wait for it to finish.", show_alert=True)
+        _JOBS.pop(token, None)   # one confirm = one broadcast
+        await query.answer("Preparing...")
+        return await _start_all_job(bot, query.message, job["units"])
 
     if job.get("target"):
         _JOBS.pop(token, None)   # one confirm = one send
@@ -339,41 +371,287 @@ async def _run_direct(bot, sts, user_id, units):
     )
 
 
+async def _send_all(bot, user_ids, units, on_progress=None, every=20):
+    """Send `units` to every id in user_ids (CONCURRENCY at a time) and return the counts.
+    on_progress(counts) is awaited every `every` finished users."""
+    counts = {"done": 0, "success": 0, "blocked": 0, "deleted": 0, "failed": 0}
+    sem = asyncio.Semaphore(CONCURRENCY)
+
+    async def _send(uid):
+        async with sem:
+            return await broadcast_messages(bot, uid, units)
+
+    tasks = [asyncio.create_task(_send(uid)) for uid in user_ids]
+    for coro in asyncio.as_completed(tasks):
+        ok, reason = await coro
+        if ok:
+            counts["success"] += 1
+        elif reason == "Blocked":
+            counts["blocked"] += 1
+        elif reason == "Deleted":
+            counts["deleted"] += 1
+        else:
+            counts["failed"] += 1
+        counts["done"] += 1
+        if on_progress and not counts["done"] % every:
+            try:
+                await on_progress(counts)
+            except Exception:
+                pass
+    return counts
+
+
 async def _run_broadcast(bot, sts, units):
     async with _RUN_LOCK:
         user_ids = await _target_user_ids()
         start_time = time.time()
         total_users = len(user_ids)
-        done = 0
-        blocked = 0
-        deleted = 0
-        failed = 0
-        success = 0
         await sts.edit_text("<b>Broadcasting your messages...</b>")
 
-        sem = asyncio.Semaphore(CONCURRENCY)
+        async def _progress(c):
+            await sts.edit_text(f"Broadcast in progress:\n\nTotal Users {total_users}\nCompleted: {c['done']} / {total_users}\nSuccess: {c['success']}\nBlocked: {c['blocked']}\nDeleted: {c['deleted']}\nFailed: {c['failed']}")
 
-        async def _send(uid):
-            async with sem:
-                return await broadcast_messages(bot, uid, units)
-
-        tasks = [asyncio.create_task(_send(uid)) for uid in user_ids]
-        for coro in asyncio.as_completed(tasks):
-            ok, reason = await coro
-            if ok:
-                success += 1
-            elif reason == "Blocked":
-                blocked += 1
-            elif reason == "Deleted":
-                deleted += 1
-            else:
-                failed += 1
-            done += 1
-            if not done % 20:
-                try:
-                    await sts.edit_text(f"Broadcast in progress:\n\nTotal Users {total_users}\nCompleted: {done} / {total_users}\nSuccess: {success}\nBlocked: {blocked}\nDeleted: {deleted}\nFailed: {failed}")
-                except Exception:
-                    pass
+        c = await _send_all(bot, user_ids, units, _progress)
 
         time_taken = datetime.timedelta(seconds=int(time.time() - start_time))
-        await sts.edit_text(f"Broadcast Completed:\nCompleted in {time_taken} seconds.\n\nTotal Users {total_users}\nCompleted: {done} / {total_users}\nSuccess: {success}\nBlocked: {blocked}\nDeleted: {deleted}\nFailed: {failed}")
+        await sts.edit_text(f"Broadcast Completed:\nCompleted in {time_taken} seconds.\n\nTotal Users {total_users}\nCompleted: {c['done']} / {total_users}\nSuccess: {c['success']}\nBlocked: {c['blocked']}\nDeleted: {c['deleted']}\nFailed: {c['failed']}")
+
+
+# ======================================================================
+# ONE CLICK -> EVERY BOT
+# ======================================================================
+# Every bot (one Railway service each) shares this MongoDB but has its own
+# users. "All Bots" works like this:
+#   1. the bot you pressed the button on copies your messages ONCE into
+#      STAGE_CHAT (REPORT_CHANNEL; every bot is an admin there) and writes a
+#      job into MongoDB (broadcast_jobs) with one "part" per online bot;
+#   2. every bot checks for jobs every few seconds, takes its own part, and
+#      sends the staged messages to ITS OWN users;
+#   3. the bot you pressed the button on shows the combined progress, then the
+#      final result, and finally deletes the staged copies.
+# Which bots are "online" comes from a heartbeat every bot writes (bot_registry).
+
+STAGE_CHAT = REPORT_CHANNEL
+ONLINE_WINDOW = 180      # a bot counts as online if its heartbeat is newer than this (seconds)
+HEARTBEAT_EVERY = 60
+POLL_EVERY = 4
+CLAIM_WAIT = 600         # a bot that did not take its part within this time is skipped
+STALL_AFTER = 300        # a running part that reported nothing for this long counts as lost
+WATCH_EVERY = 3
+_ZERO = {"total": 0, "done": 0, "success": 0, "blocked": 0, "deleted": 0, "failed": 0}
+
+
+def _jobs():
+    return db.db.broadcast_jobs
+
+
+def _registry():
+    return db.db.bot_registry
+
+
+async def _heartbeat(client):
+    try:
+        await _registry().update_one(
+            {"_id": BOT_ID},
+            {"$set": {"username": client.me.username, "seen": time.time()}},
+            upsert=True,
+        )
+    except Exception as e:
+        logger.warning(f"[ALLBOTS] heartbeat failed: {type(e).__name__}: {e}")
+
+
+async def _online_bots():
+    """(online, offline) registry documents. Offline = known bots with an old heartbeat."""
+    cutoff = time.time() - ONLINE_WINDOW
+    docs = await _registry().find({}).to_list(length=None)
+    online = sorted((d for d in docs if d.get("seen", 0) >= cutoff), key=lambda d: str(d.get("username") or d["_id"]))
+    offline = sorted((d for d in docs if d.get("seen", 0) < cutoff), key=lambda d: str(d.get("username") or d["_id"]))
+    return online, offline
+
+
+async def _stage_units(bot, units):
+    """Copy the admin's messages into STAGE_CHAT (an album stays an album).
+    Returns [{"ids": [...]}, ...] in the same order."""
+    staged = []
+    for unit in units:
+        while True:
+            try:
+                if len(unit) == 1:
+                    sent = await unit[0].copy(STAGE_CHAT)
+                    ids = [sent.id]
+                else:
+                    res = await bot.forward_messages(
+                        chat_id=STAGE_CHAT,
+                        from_chat_id=unit[0].chat.id,
+                        message_ids=[m.id for m in unit],
+                        drop_author=True,
+                    )
+                    ids = [m.id for m in (res if isinstance(res, list) else [res])]
+                break
+            except FloodWait as e:
+                await asyncio.sleep(int(e.value) + 1)
+        staged.append({"ids": ids})
+    return staged
+
+
+async def _start_all_job(bot, sts, units):
+    try:
+        online, _ = await _online_bots()
+        if not online:
+            return await sts.edit_text("<b>❌ No Bot Is Online Right Now. Try Again In A Minute.</b>")
+        await sts.edit_text("<b>📦 Preparing The Broadcast For All Bots...</b>")
+        staged = await _stage_units(bot, units)
+    except Exception as e:
+        logger.error(f"[ALLBOTS] could not start: {type(e).__name__}: {e}")
+        return await sts.edit_text(f"<b>❌ Could Not Start The Broadcast.</b>\n<code>{type(e).__name__}</code>")
+
+    token = secrets.token_hex(4)
+    now = time.time()
+    parts = {
+        str(d["_id"]): {"state": "pending", "username": str(d.get("username") or ""), "beat": now, **_ZERO}
+        for d in online
+    }
+    try:
+        await _jobs().delete_many({"created": {"$lt": now - 2 * 86400}})
+        await _jobs().insert_one({
+            "_id": token, "created": now, "status": "running", "origin_bot": BOT_ID,
+            "stage_chat": STAGE_CHAT, "units": staged, "parts": parts,
+        })
+    except Exception as e:
+        logger.error(f"[ALLBOTS] could not save the job: {type(e).__name__}: {e}")
+        return await sts.edit_text("<b>❌ Could Not Start The Broadcast (Database Error).</b>")
+    _spawn(_watch_job(bot, sts, token))
+
+
+def _part_line(part):
+    name = "@" + html.escape(part.get("username") or "?")
+    state = part.get("state")
+    if state == "pending":
+        return f"{name} — ⏸ Waiting"
+    if state == "skipped":
+        return f"{name} — ⛔ Skipped (Did Not Respond)"
+    if state == "lost":
+        return f"{name} — ⚠️ Stopped Midway ({part['done']}/{part['total']})"
+    if state == "failed":
+        return f"{name} — ❌ Failed ({html.escape(part.get('error', 'error'))})"
+    icon = "✅ Done" if state == "done" else "⏳ Running"
+    return (f"{name} — {icon} {part['done']}/{part['total']} | "
+            f"✅ {part['success']} | 🚫 {part['blocked']} | 🗑 {part['deleted']} | ❌ {part['failed']}")
+
+
+def _all_text(job, final):
+    parts = list(job["parts"].values())
+    total = {k: sum(p.get(k, 0) for p in parts) for k in _ZERO}
+    head = "<b>✅ Broadcast Completed (All Bots)</b>" if final else "<b>📣 Broadcasting To All Bots...</b>"
+    return (
+        head + "\n\n" + "\n".join(_part_line(p) for p in parts) + "\n\n"
+        f"<b>Total Users:</b> {total['total']}\n"
+        f"<b>Completed:</b> {total['done']} / {total['total']}\n"
+        f"<b>Success:</b> {total['success']}\n"
+        f"<b>Blocked:</b> {total['blocked']}\n"
+        f"<b>Deleted:</b> {total['deleted']}\n"
+        f"<b>Failed:</b> {total['failed']}"
+    )
+
+
+async def _watch_job(bot, sts, token):
+    """Runs on the bot you pressed the button on: shows combined progress and cleans up."""
+    last = ""
+    while True:
+        await asyncio.sleep(WATCH_EVERY)
+        try:
+            job = await _jobs().find_one({"_id": token})
+            if not job:
+                return
+            now = time.time()
+            for bid, part in job["parts"].items():
+                if part["state"] == "pending" and now - job["created"] > CLAIM_WAIT:
+                    await _jobs().update_one({"_id": token, f"parts.{bid}.state": "pending"},
+                                             {"$set": {f"parts.{bid}.state": "skipped"}})
+                elif part["state"] == "running" and now - part.get("beat", now) > STALL_AFTER:
+                    await _jobs().update_one({"_id": token, f"parts.{bid}.state": "running"},
+                                             {"$set": {f"parts.{bid}.state": "lost"}})
+            job = await _jobs().find_one({"_id": token})
+            final = all(p["state"] not in ("pending", "running") for p in job["parts"].values())
+            text = _all_text(job, final)
+            if text != last:
+                last = text
+                try:
+                    await sts.edit_text(text)
+                except Exception:
+                    pass
+            if final:
+                ids = [i for u in job["units"] for i in u["ids"]]
+                for i in range(0, len(ids), 100):
+                    try:
+                        await bot.delete_messages(job["stage_chat"], ids[i:i + 100])
+                    except Exception:
+                        pass
+                await _jobs().update_one({"_id": token}, {"$set": {"status": "done"}})
+                return
+        except Exception as e:
+            logger.warning(f"[ALLBOTS] watcher error: {type(e).__name__}: {e}")
+
+
+async def _run_part(client, job):
+    """Runs on EVERY bot: send the staged messages to this bot's own users."""
+    token = job["_id"]
+    key = f"parts.{BOT_ID}"
+
+    async def _save(c, state=None, total=None):
+        upd = {f"{key}.{k}": v for k, v in c.items()}
+        upd[f"{key}.beat"] = time.time()
+        if total is not None:
+            upd[f"{key}.total"] = total
+        if state:
+            upd[f"{key}.state"] = state
+        await _jobs().update_one({"_id": token}, {"$set": upd})
+
+    try:
+        units = []
+        for u in job["units"]:
+            msgs = await client.get_messages(job["stage_chat"], u["ids"])
+            msgs = [m for m in (msgs if isinstance(msgs, list) else [msgs]) if m and not getattr(m, "empty", False)]
+            if len(msgs) != len(u["ids"]):
+                raise RuntimeError("staged message missing")
+            units.append(msgs)
+        async with _RUN_LOCK:
+            user_ids = await _target_user_ids()
+            total = len(user_ids)
+            await _save({"done": 0}, total=total)
+
+            async def _progress(c):
+                await _save(c)
+
+            counts = await _send_all(client, user_ids, units, _progress, every=25)
+            await _save(counts, state="done", total=total)
+    except Exception as e:
+        logger.error(f"[ALLBOTS] part failed: {type(e).__name__}: {e}")
+        try:
+            await _jobs().update_one({"_id": token}, {"$set": {
+                f"{key}.state": "failed",
+                f"{key}.error": f"{type(e).__name__}"[:60],
+                f"{key}.beat": time.time(),
+            }})
+        except Exception:
+            pass
+
+
+async def cross_bot_loop(client):
+    """Started once per bot (bot.py): heartbeat + picks up its part of all-bots broadcasts."""
+    last_beat = 0.0
+    while True:
+        try:
+            if time.time() - last_beat >= HEARTBEAT_EVERY:
+                await _heartbeat(client)
+                last_beat = time.time()
+            job = await _jobs().find_one_and_update(
+                {"status": "running", f"parts.{BOT_ID}.state": "pending"},
+                {"$set": {f"parts.{BOT_ID}.state": "running", f"parts.{BOT_ID}.beat": time.time()}},
+            )
+            if job:
+                _spawn(_run_part(client, job))
+                continue   # look for another job right away
+        except Exception as e:
+            logger.warning(f"[ALLBOTS] loop error: {type(e).__name__}: {e}")
+        await asyncio.sleep(POLL_EVERY)
