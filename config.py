@@ -44,6 +44,10 @@ LOG_CHANNEL = int(environ.get("LOG_CHANNEL", ""))
 # REPORT_CHANNEL = reports only: new user, file access, bot restart, delivery errors.
 # Optional: if it is not set, reports go to LOG_CHANNEL like before.
 REPORT_CHANNEL = int(environ.get("REPORT_CHANNEL") or LOG_CHANNEL)
+# True: besides the text report, REPORT_CHANNEL also gets the very same file(s) the
+# user received (same caption, same Fast Download / Watch Online buttons).
+# Set False to keep only the text reports (for example when traffic gets very high).
+REPORT_COPY_FILES = is_enabled(environ.get("REPORT_COPY_FILES", "True"), True)
 
 # File Caption Information
 CUSTOM_FILE_CAPTION = environ.get("CUSTOM_FILE_CAPTION", f"{script.CAPTION}")
