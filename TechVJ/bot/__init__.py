@@ -1,6 +1,10 @@
 from pyrogram import Client, types
 from config import *
 from typing import Union, Optional, AsyncGenerator
+from contextvars import ContextVar
+
+# Set to True around copies that must reach users unchanged (broadcast staging)
+NO_SIGN = ContextVar("NO_SIGN", default=False)
 
 class StreamXBot(Client):
 
@@ -17,7 +21,7 @@ class StreamXBot(Client):
     async def send_message(self, chat_id, text=None, *args, **kwargs):
         """Reports go to one shared REPORT_CHANNEL, so with several bots every
         report is signed with the bot it came from."""
-        if chat_id == REPORT_CHANNEL and isinstance(text, str):
+        if chat_id == REPORT_CHANNEL and isinstance(text, str) and not NO_SIGN.get():
             username = getattr(self.me, "username", None) if getattr(self, "me", None) else None
             if username:
                 text = f"{text}\n\n<b>🤖 Bot:</b> @{username}"
