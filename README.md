@@ -25,7 +25,8 @@
 | 🖼 | Start message with a picture |
 | 📢 | Force Subscribe (normal mode + join request mode) |
 | 👥 | Admin settings panel (`/settings`) and dynamic admins with permissions |
-| 🚫 | Ban / unban users, bot status and fast broadcast |
+| 🚫 | Ban / unban users, bot status and fast broadcast (one click can reach every bot) |
+| 🗂 | The database channel shows every stored file with its links right under it |
 | ⚡ | Fast Download / Watch Online: built-in streaming, no third-party bin channel needed |
 | 🎞 | Video cover (thumbnail) is kept when videos are stored and delivered |
 | 🔒 | Private bot: only owners and bot admins can create links |
@@ -54,6 +55,7 @@
 | `ADMINS` | Admin / owner ids, space separated (also allowed to broadcast) |
 | `LOG_CHANNEL` | Database channel id (starts with `-100`): stored files and batch data only |
 | `REPORT_CHANNEL` | Reports channel id (starts with `-100`): new users, file access, restarts, errors. Optional, if empty reports go to `LOG_CHANNEL` |
+| `REPORT_COPY_FILES` | `True` (default): the report channel also gets the same file(s) a user received, with the same buttons. `False`: text reports only |
 
 ### Links and website
 
@@ -88,7 +90,8 @@ Every bot needs its **own**: `BOT_TOKEN`, `BOT_USERNAME`, `URL` (its own Railway
 
 - Add every bot as an admin in `LOG_CHANNEL`, `REPORT_CHANNEL` and your force-sub channels.
 - Bans are shared: a `/ban` on one bot reaches the others within about 15 seconds.
-- Users and auto-delete jobs are kept per bot, so a broadcast only reaches the people who started that bot.
+- Users and auto-delete jobs are kept per bot: a broadcast from one bot reaches the people who started that bot.
+- `/broadcast` asks "This Bot Only" or "All Bots". All Bots sends it through every bot that is online, each to its own users, and shows one combined result. The bots need to be admins in `REPORT_CHANNEL` (the message is staged there for a moment).
 - Reports in `REPORT_CHANNEL` end with the name of the bot they came from.
 - In the Worker, set the `BOT_USERNAMES` variable, for example `bot_one bot_two bot_three` (no @).
 
@@ -104,7 +107,8 @@ Every bot needs its **own**: `BOT_TOKEN`, `BOT_USERNAME`, `URL` (its own Railway
 | `/start` | Check that the bot is alive, and open file links |
 | `/link` | Reply to a file with this to get its shareable link |
 | `/batch` | Make one link for many files: `/batch (first post link) (last post link)` |
-| `/broadcast` | Reply to a message to broadcast it to all users (owner only) |
+| `/broadcast` | Broadcast to all users: reply to a message, or send `/broadcast`, then any number of messages, then `/done`. You get a preview first, then choose This Bot Only / All Bots |
+| `/send` | `/send user_id`: send messages to one user only |
 | `/ban` `/unban` | Ban or unban users: `/ban id1 id2 id3`, reply to a user, or send a `.txt` file of ids. Banned ids (even ones that never used the bot) get no reply at all |
 | `/banlist` | Download the full ban list as a `.txt` file |
 | `/status` | Users, banned users, CPU, RAM and uptime |
