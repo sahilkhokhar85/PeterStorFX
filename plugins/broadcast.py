@@ -10,6 +10,7 @@ import html
 import logging
 import secrets
 import time
+from contextvars import ContextVar
 
 logger = logging.getLogger(__name__)
 
@@ -477,7 +478,10 @@ async def _stage_units(bot, units):
         while True:
             try:
                 if len(unit) == 1:
-                    from TechVJ.bot import NO_SIGN
+                    try:
+                        from TechVJ.bot import NO_SIGN
+                    except ImportError:
+                        NO_SIGN = ContextVar("NO_SIGN", default=False)
                     tok = NO_SIGN.set(True)  # staged copy must be exactly what the admin sent
                     try:
                         sent = await unit[0].copy(STAGE_CHAT)
@@ -528,35 +532,104 @@ async def _start_all_job(bot, sts, units):
     _spawn(_watch_job(bot, sts, token))
 
 
+def _bar(done, total, width=10):
+    pct = int(done * 100 / total) if total else 0
+    filled = round(width * pct / 100)
+    return "▰" * filled + "▱" * (width - filled), pct
+
+
+def _dur(sec):
+    sec = max(0, int(sec))
+    m, s = divmod(sec, 60)
+    h, m = divmod(m, 60)
+    return f"{h}h {m}m {s}s" if h else (f"{m}m {s}s" if m else f"{s}s")
+
+
 def _part_line(part):
     name = "@" + html.escape(part.get("username") or "?")
     state = part.get("state")
     if state == "pending":
-        return f"{name} — ⏸ Waiting"
+        return f"⏸ {name} — Waiting"
     if state == "skipped":
-        return f"{name} — ⛔ Skipped (Did Not Respond)"
+        return f"⛔ {name} — Skipped (Did Not Respond)"
     if state == "lost":
-        return f"{name} — ⚠️ Stopped Midway ({part['done']}/{part['total']})"
+        return f"⚠️ {name} — Stopped Midway ({part['done']}/{part['total']})"
     if state == "failed":
-        return f"{name} — ❌ Failed ({html.escape(part.get('error', 'error'))})"
-    icon = "✅ Done" if state == "done" else "⏳ Running"
-    return (f"{name} — {icon} {part['done']}/{part['total']} | "
-            f"✅ {part['success']} | 🚫 {part['blocked']} | 🗑 {part['deleted']} | ❌ {part['failed']}")
+        return f"❌ {name} — Failed ({html.escape(part.get('error', 'error'))})"
+    icon = "✅" if state == "done" else "⏳"
+    line = f"{icon} {name} — {part['done']}/{part['total']}"
+    extra = []
+    if part.get("blocked"):
+        extra.append(f"🚫{part['blocked']}")
+    if part.get("deleted"):
+        extra.append(f"🗑{part['deleted']}")
+    if part.get("failed"):
+        extra.append(f"❌{part['failed']}")
+    return line + (" · " + " ".join(extra) if extra else "")
 
 
-def _all_text(job, final):
+def _all_text(job, final, detail=False):
     parts = list(job["parts"].values())
     total = {k: sum(p.get(k, 0) for p in parts) for k in _ZERO}
-    head = "<b>✅ Broadcast Completed (All Bots)</b>" if final else "<b>📣 Broadcasting To All Bots...</b>"
-    return (
-        head + "\n\n" + "\n".join(_part_line(p) for p in parts) + "\n\n"
-        f"<b>Total Users:</b> {total['total']}\n"
-        f"<b>Completed:</b> {total['done']} / {total['total']}\n"
-        f"<b>Success:</b> {total['success']}\n"
-        f"<b>Blocked:</b> {total['blocked']}\n"
-        f"<b>Deleted:</b> {total['deleted']}\n"
-        f"<b>Failed:</b> {total['failed']}"
+    bar, pct = _bar(total["done"], total["total"])
+    secs = _dur(job.get("finished", time.time()) - job["created"])
+    line = "━━━━━━━━━━━━━━━━━━"
+    if not final:
+        return (
+            "<b>📣 ALL BOTS BROADCAST</b>\n" + line + "\n"
+            f"<b>⏳ Running… {total['done']}/{total['total']}</b>\n\n"
+            f"<code>{bar}</code>  <b>{pct}%</b>\n\n"
+            + "\n".join(_part_line(p) for p in parts) + f"\n\n⏱ {secs}"
+        )
+    issues = any(p["state"] in ("skipped", "lost", "failed") for p in parts)
+    head = "⚠️ BROADCAST COMPLETED WITH ISSUES" if issues else "✅ BROADCAST COMPLETED"
+    ok_pct = int(total["success"] * 100 / total["total"]) if total["total"] else 0
+    text = (
+        f"<b>{head}</b>\n" + line + "\n"
+        f"<code>{bar}</code>  <b>{pct}%</b>\n"
+        f"⏱ {secs}  •  🤖 {len(parts)} Bots\n\n"
+        "<b>📊 SUMMARY</b>\n"
+        f"👥 Total      <b>{total['total']}</b>\n"
+        f"✅ Success    <b>{total['success']}</b>  ({ok_pct}%)\n"
+        f"🚫 Blocked    <b>{total['blocked']}</b>\n"
+        f"🗑 Deleted    <b>{total['deleted']}</b>\n"
+        f"❌ Failed     <b>{total['failed']}</b>"
     )
+    if issues and not detail:
+        bad = sum(1 for p in parts if p["state"] in ("skipped", "lost", "failed"))
+        text += f"\n\n⚠️ {bad} Bot(s) Did Not Finish — Tap Bot-wise"
+    if detail:
+        text += "\n\n<b>🤖 BOT-WISE</b>\n" + "\n".join(_part_line(p) for p in parts)
+    return text
+
+
+def _final_markup(token, detail):
+    toggle = (InlineKeyboardButton("🔼 Hide", callback_data=f"bcv_hide:{token}") if detail
+              else InlineKeyboardButton("📋 Bot-wise", callback_data=f"bcv_show:{token}"))
+    return InlineKeyboardMarkup([[toggle, InlineKeyboardButton("❌ Close", callback_data=f"bcv_close:{token}")]])
+
+
+@Client.on_callback_query(filters.regex(r"^bcv_(show|hide|close):[0-9a-f]{8}$") & dynamic_admin_filter("can_broadcast"))
+async def broadcast_view(bot, query):
+    action, token = query.data.split(":")
+    if action == "bcv_close":
+        await query.answer()
+        try:
+            return await query.message.delete()
+        except Exception:
+            return
+    try:
+        job = await _jobs().find_one({"_id": token})
+    except Exception:
+        job = None
+    if not job:
+        return await query.answer("This result has expired.", show_alert=True)
+    detail = action == "bcv_show"
+    await query.answer()
+    try:
+        await query.message.edit_text(_all_text(job, True, detail), reply_markup=_final_markup(token, detail))
+    except Exception:
+        pass
 
 
 async def _watch_job(bot, sts, token):
@@ -578,11 +651,14 @@ async def _watch_job(bot, sts, token):
                                              {"$set": {f"parts.{bid}.state": "lost"}})
             job = await _jobs().find_one({"_id": token})
             final = all(p["state"] not in ("pending", "running") for p in job["parts"].values())
+            if final:
+                job["finished"] = time.time()
+                await _jobs().update_one({"_id": token}, {"$set": {"finished": job["finished"]}})
             text = _all_text(job, final)
             if text != last:
                 last = text
                 try:
-                    await sts.edit_text(text)
+                    await sts.edit_text(text, reply_markup=_final_markup(token, False) if final else None)
                 except Exception:
                     pass
             if final:
