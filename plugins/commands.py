@@ -85,42 +85,72 @@ def stream_download_buttons(chat_id, message_id, media, user_id):
         return []
         
 
-async def _forward_accessed_to_log(client, refs):
-    """Forward the actual files/videos a user just accessed (batch) into
-    the report channel, grouped and chunked, so admins can see/open the real files
-    instead of only reading their names. Runs as a background task."""
-    by_channel = {}
-    for ch, mid in refs:
-        by_channel.setdefault(ch, []).append(mid)
-    for ch, ids in by_channel.items():
-        for i in range(0, len(ids), 100):
-            chunk = ids[i:i + 100]
-            try:
-                await client.forward_messages(REPORT_CHANNEL, ch, chunk)
-            except FloodWait as e:
-                await asyncio.sleep(e.value)
-                try:
-                    await client.forward_messages(REPORT_CHANNEL, ch, chunk)
-                except Exception:
-                    pass
-            except Exception:
-                pass
-            await asyncio.sleep(0.5)
+# ---------------------------------------------------------------------------
+# Report channel: what each user received
+# ---------------------------------------------------------------------------
+# After a user opens a link, REPORT_CHANNEL gets the report text and then the very
+# same message(s) the user got: same file, same caption, same Fast Download /
+# Watch Online buttons. Everything goes through ONE queue so that
+#   (a) one access always stays together, in order, and
+#   (b) a rush of users cannot flood Telegram: items go out slowly, one by one.
+# Set REPORT_COPY_FILES=False to stop the file copies (the text reports stay).
+
+REPORT_QUEUE_LIMIT = 3000   # if the queue is ever this full, new file copies are skipped
+REPORT_GAP = 0.7            # seconds between two items sent to the report channel
+_REPORT_QUEUE = None
+_REPORT_WORKER = None
 
 
-async def _forward_single_to_log(client, msg):
-    """Forward the single file/video a user just accessed into the report channel
-    so admins can see the real file, not just its name. Background task."""
-    try:
-        await client.forward_messages(REPORT_CHANNEL, msg.chat.id, msg.id)
-    except FloodWait as e:
-        await asyncio.sleep(e.value)
+def _has_buttons(markup):
+    return bool(markup and getattr(markup, "inline_keyboard", None))
+
+
+def queue_report(client, text, files=()):
+    """text: the report message. files: [(source_message, caption, reply_markup), ...]
+    caption None keeps the original caption; reply_markup None means no buttons."""
+    global _REPORT_QUEUE, _REPORT_WORKER
+    if _REPORT_QUEUE is None:
+        _REPORT_QUEUE = asyncio.Queue()
+    items = [("text", client, text)]
+    if REPORT_COPY_FILES:
+        items += [
+            ("file", client, src, caption, markup if _has_buttons(markup) else None)
+            for src, caption, markup in files
+        ]
+    if len(items) > 1 and _REPORT_QUEUE.qsize() + len(items) > REPORT_QUEUE_LIMIT:
+        logger.warning("[REPORT] queue is full, skipping the file copies of one report")
+        items = items[:1]
+    for item in items:
+        _REPORT_QUEUE.put_nowait(item)
+    if _REPORT_WORKER is None or _REPORT_WORKER.done():
+        _REPORT_WORKER = asyncio.create_task(_report_worker())
+
+
+async def _report_worker():
+    while True:
+        item = await _REPORT_QUEUE.get()
         try:
-            await client.forward_messages(REPORT_CHANNEL, msg.chat.id, msg.id)
-        except Exception:
-            pass
-    except Exception:
-        pass
+            for _ in range(3):
+                try:
+                    if item[0] == "text":
+                        await item[1].send_message(REPORT_CHANNEL, item[2])
+                    else:
+                        _, _client, src, caption, markup = item
+                        kw = {}
+                        if caption is not None:
+                            kw["caption"] = caption
+                        if markup is not None:
+                            kw["reply_markup"] = markup
+                        await _copy_media(src, REPORT_CHANNEL, **kw)
+                    break
+                except FloodWait as e:
+                    await asyncio.sleep(int(e.value) + 1)
+                except Exception as e:
+                    logger.info(f"[REPORT] couldn't send a report item: {type(e).__name__}: {e}")
+                    break
+        finally:
+            _REPORT_QUEUE.task_done()
+        await asyncio.sleep(REPORT_GAP)
 
 
 # Keep references to background tasks so they can't be garbage-collected mid-run.
@@ -246,14 +276,13 @@ async def start(client, message):
 
                     title = "Sticker"
 
-                    await client.send_message(
-                        REPORT_CHANNEL,
+                    queue_report(
+                        client,
                         f"<b>📥 #FileAccess</b>\n\n"
                         f"👤 User: {message.from_user.mention} (<code>{message.from_user.id}</code>)\n"
-                        f"🎬 File: <code>{title}</code>"
+                        f"🎬 File: <code>{title}</code>",
+                        [(msg, None, None)],
                     )
-                    
-                    asyncio.create_task(_forward_single_to_log(client, msg))
 
                     if settings.get("auto_delete", True):
                         del_minutes = max(1, settings.get("auto_delete_time", 1800) // 60)
@@ -301,8 +330,8 @@ async def start(client, message):
             
         filesarr = []
         titles = []
-        accessed_refs = []  # (channel_id, msg_id) pairs actually delivered - used to
-                             # forward the real files/videos into the access log below.
+        report_items = []   # (source message, caption, buttons) of everything delivered -
+                            # sent to the report channel below, exactly as the user got it.
 
         # Fetch every source message in bulk (chunks of 200) instead of one
         # get_messages() call per file - this is the single biggest speedup
@@ -342,7 +371,7 @@ async def start(client, message):
                     title = "Sticker"
                     filesarr.append(msg)
                     titles.append(title)
-                    accessed_refs.append((channel_id, msgid))
+                    report_items.append((info, None, None))
 
                 except FloodWait as e:
                     await asyncio.sleep(e.value)
@@ -354,7 +383,7 @@ async def start(client, message):
                         title = "Sticker"
                         filesarr.append(msg)
                         titles.append(title)
-                        accessed_refs.append((channel_id, msgid))
+                        report_items.append((info, None, None))
                     except Exception:
                         continue
 
@@ -364,6 +393,7 @@ async def start(client, message):
                 await asyncio.sleep(0.6)
                 continue
 
+            rep_caption = None   # caption of the report copy (None = keep the original)
             if info.media:
                 file_type = info.media
                 file = getattr(info, file_type.value)
@@ -390,6 +420,7 @@ async def start(client, message):
 
                 if f_caption is None:
                     f_caption = f"{title}"
+                rep_caption = f_caption
 
                 button = []
 
@@ -455,7 +486,7 @@ async def start(client, message):
 
             filesarr.append(msg)
             titles.append(title)
-            accessed_refs.append((channel_id, msgid))
+            report_items.append((info, rep_caption, reply_markup))
             await asyncio.sleep(0.6)
         try:
             if titles:
@@ -465,18 +496,15 @@ async def start(client, message):
                     files_list += f"\n... and {len(titles) - 30} more"
             else:
                 files_list = "N/A"
-            await client.send_message(
-                REPORT_CHANNEL,
+            queue_report(
+                client,
                 f"<b>📥 #FileAccess (Batch)</b>\n\n"
                 f"👤 User: {message.from_user.mention} (<code>{message.from_user.id}</code>)\n"
                 f"📦 Files Accessed: <code>{len(filesarr)}</code>\n\n"
                 f"{files_list}\n\n"
-                f"⬇️ ᴀᴄᴛᴜᴀʟ ꜰɪʟᴇꜱ ʙᴇʟᴏᴡ"
+                f"⬇️ ᴀᴄᴛᴜᴀʟ ꜰɪʟᴇꜱ ʙᴇʟᴏᴡ",
+                report_items,
             )
-            # Also forward the real accessed files/videos into the log channel
-            # (not just their names) - runs in the background so it never
-            # slows down the reply the user is waiting for.
-            asyncio.create_task(_forward_accessed_to_log(client, accessed_refs))
         except:
             pass
         await sts.delete()
@@ -503,6 +531,8 @@ async def start(client, message):
         return await message.reply_text("<b>❌ This link is invalid or broken.</b>")
     try:
         msg = await client.get_messages(LOG_CHANNEL, int(decode_file_id))
+        rep_caption = None   # what the report copy gets: same caption and buttons as the user's
+        rep_markup = None
 
         # Sticker: send directly without caption/buttons
         if msg.sticker:
@@ -612,6 +642,7 @@ async def start(client, message):
                     )
 
                     reply_markup = InlineKeyboardMarkup(button)
+                    rep_caption, rep_markup = f_caption, reply_markup
 
                     del_msg = await _copy_media(
                         msg,
@@ -651,15 +682,13 @@ async def start(client, message):
                 protect_content=settings.get("protect_content", False)
             )
         try:
-            await client.send_message(
-                REPORT_CHANNEL,
+            queue_report(
+                client,
                 f"<b>📥 #FileAccess</b>\n\n"
                 f"👤 User: {message.from_user.mention} (<code>{message.from_user.id}</code>)\n"
-                f"🎬 File: <code>{title}</code>"
+                f"🎬 File: <code>{title}</code>",
+                [(msg, rep_caption, rep_markup)],
             )
-            # Also forward the real accessed file into the log channel (not
-            # just its name), in the background so delivery isn't delayed.
-            asyncio.create_task(_forward_single_to_log(client, msg))
         except:
             pass
         if settings.get("auto_delete", True):
