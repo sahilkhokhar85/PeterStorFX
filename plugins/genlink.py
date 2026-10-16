@@ -241,9 +241,61 @@ def reply_link_text(permanent_link, share_link):
     )
 
 
-async def build_link_reply(source_message):
+def _human_size(size):
+    if not size:
+        return "N/A"
+    size = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.2f} {unit}"
+        size /= 1024
+
+
+def _file_info(message):
+    """(name, size) of the media in a message, for the report."""
+    media_type = getattr(message, "media", None)
+    obj = getattr(message, media_type.value, None) if media_type else None
+    name = getattr(obj, "file_name", None)
+    if not name:
+        text = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+        name = text[:60] if text else (media_type.value.title() if media_type else "Message")
+    return name, getattr(obj, "file_size", None)
+
+
+async def post_links_to_log(bot, reply_to_id, admin, info_lines, permanent_link, share_link):
+    """Right under a file (or Batch.json) that was just stored in LOG_CHANNEL,
+    post the links made for it, so the database channel shows
+    "file -> its links". Only the permanent link and the original link are
+    shown (the shortener link in the middle is never shown). A problem here
+    must never break link generation, so every error is swallowed."""
+    lines = ["<b>🔗 Links For The Message Above</b>", ""]
+    lines += info_lines
+    if admin:
+        lines.append(f"👤 By: {admin.mention} (<code>{admin.id}</code>)")
+    lines.append("")
+    if permanent_link:
+        lines.append(f"🔗 Permanent: {html.escape(permanent_link)}")
+    if share_link:
+        lines.append(f"🖇 Original: {html.escape(share_link)}")
+    text = "\n".join(lines)
+    try:
+        try:
+            await bot.send_message(
+                LOG_CHANNEL, text,
+                reply_to_message_id=reply_to_id,
+                disable_web_page_preview=True,
+            )
+        except TypeError:
+            await bot.send_message(LOG_CHANNEL, text, disable_web_page_preview=True)
+    except Exception as e:
+        print(f"LOG LINKS ERROR: {type(e).__name__}: {e}")
+
+
+async def build_link_reply(source_message, bot=None, admin=None):
     """Create (or reuse) the link for one media message and return the reply
-    text. This is the only place that copies a file into LOG_CHANNEL."""
+    text. This is the only place that copies a file into LOG_CHANNEL. When a
+    new file was stored and `bot` is given, its links are posted right under
+    it in LOG_CHANNEL."""
     cache_key = get_message_cache_key(source_message)
     saved = await get_saved_link(cache_key)
 
@@ -253,16 +305,29 @@ async def build_link_reply(source_message):
             saved.get("share_link", ""),
         )
 
+    stored_id = None
     if saved and saved.get("share_link"):
         share_link = saved["share_link"]
     else:
         post = await copy_keep_cover(source_message, LOG_CHANNEL)
         share_link = make_file_share_link(post.id)
+        stored_id = post.id
 
     permanent_link, share_link = await get_or_create_link(
         cache_key,
         share_link,
     )
+
+    if bot and stored_id:
+        name, size = _file_info(source_message)
+        await post_links_to_log(
+            bot, stored_id, admin,
+            [
+                f"🎬 File: <code>{html.escape(name)}</code>",
+                f"📦 Size: {_human_size(size)}",
+            ],
+            permanent_link, share_link,
+        )
 
     return reply_link_text(permanent_link, share_link)
 
@@ -325,7 +390,7 @@ async def gen_link_answer(bot, query):
             return await prompt.edit_text(
                 bold("❌ That File Is No Longer Available. Send It Again.")
             )
-        text = await build_link_reply(source)
+        text = await build_link_reply(source, bot, query.from_user)
     except FloodWait as e:
         return await prompt.edit_text(
             bold(f"❌ Telegram Is Busy. Try Again In {int(e.value)} Seconds.")
@@ -354,7 +419,7 @@ async def gen_link_s(bot, message):
             bold("Reply to a message to get a shareable link.")
         )
 
-    await message.reply(await build_link_reply(replied))
+    await message.reply(await build_link_reply(replied, bot, message.from_user))
 
 
 # ============================================================
@@ -752,7 +817,9 @@ async def gen_link_batch(bot, message):
 
         # Files must live in the log channel, not in the source channel.
         kept = 0
-        source_id = (await bot.get_chat(first_chat_id)).id
+        source_chat = await bot.get_chat(first_chat_id)
+        source_id = source_chat.id
+        source_title = getattr(source_chat, "title", None) or str(source_id)
         if int(source_id) != int(LOG_CHANNEL):
             outlist, kept = await copy_batch_to_log(
                 bot, outlist, originals, status
@@ -810,6 +877,17 @@ async def gen_link_batch(bot, message):
                 f"🔗 Original link: "
                 f"{html.escape(share_link)}</b>"
             )
+
+        await post_links_to_log(
+            bot, post.id, message.from_user,
+            [
+                f"📦 Batch: <code>{len(outlist)}</code> files"
+                + (f" ({kept} kept in source)" if kept else ""),
+                f"📺 Source: {html.escape(source_title)} (<code>{source_id}</code>), "
+                f"messages {first_msg_id} to {last_msg_id}",
+            ],
+            permanent_link, share_link,
+        )
 
         await status.edit(final_text)
 
