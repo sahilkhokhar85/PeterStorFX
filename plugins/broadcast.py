@@ -117,6 +117,10 @@ def _clean_old_jobs():
         _JOBS.pop(token, None)
 
 
+def _users(n):
+    return "User" if n == 1 else "Users"
+
+
 async def _make_preview(bot, admin_id, chat_id, units, target=None):
     """Show the admin exactly what will be sent (in order), then Confirm / Cancel."""
     try:
@@ -135,38 +139,44 @@ async def _make_preview(bot, admin_id, chat_id, units, target=None):
     _JOBS[token] = {"admin": admin_id, "units": units, "target": target, "t": time.time()}
     n = len(units)
     what = "1 Message" if n == 1 and len(units[0]) == 1 else (
-        f"1 Album Of {len(units[0])} Items" if n == 1 else f"{n} Messages")
-    order = " In This Order" if n > 1 else ""
-    buttons = []
-    extra = ""
+        f"1 Album · {len(units[0])} Items" if n == 1 else f"{n} Messages (In Order)")
+    line = "━━━━━━━━━━━━━━━━━━"
+    cancel = [InlineKeyboardButton("❌ Cancel", callback_data=f"bc_no:{token}")]
     if target:
-        who = f"ONLY To User <code>{target}</code>"
-        ask = "Is This Exactly What You Want To Send?"
-        buttons.append(InlineKeyboardButton("✅ Confirm Send", callback_data=f"bc_yes:{token}"))
-    else:
-        who = f"To {len(await _target_user_ids())} Users Of This Bot"
-        ask = "Is This Exactly What You Want To Broadcast?"
-        buttons.append(InlineKeyboardButton("✅ This Bot Only", callback_data=f"bc_yes:{token}"))
-        try:
-            online, offline = await _online_bots()
-        except Exception:
-            online, offline = [], []
-        if len(online) > 1:
-            lines = []
-            for d in online:
-                count = await db.col.count_documents({"bot_id": d["_id"]})
-                lines.append(f"• @{html.escape(str(d.get('username') or d['_id']))} — {count} Users")
-            extra = "\n\n<b>📣 All Bots (Online Now):</b>\n" + "\n".join(lines)
-            if offline:
-                extra += "\n<b>Offline (Will Be Skipped):</b> " + ", ".join(
-                    "@" + html.escape(str(d.get("username") or d["_id"])) for d in offline)
-            buttons.append(InlineKeyboardButton(f"📣 All Bots ({len(online)})", callback_data=f"bc_all:{token}"))
-    await bot.send_message(
-        chat_id,
-        f"<b>👆 Preview: {what} Will Be Sent {who}{order}.</b>{extra}\n\n"
-        f"<b>{ask}</b>",
-        reply_markup=InlineKeyboardMarkup([buttons, [InlineKeyboardButton("❌ Cancel", callback_data=f"bc_no:{token}")]]),
+        text = (
+            "<b>👆 SEND PREVIEW</b>\n" + line + "\n"
+            f"📦 <b>{what}</b>\n\n"
+            f"🎯 <b>SEND TO</b>\n • User <code>{target}</code> only\n\n"
+            "<b>⚠️ Check once — sending can't be undone.</b>"
+        )
+        buttons = [InlineKeyboardButton("✅ Confirm Send", callback_data=f"bc_yes:{token}")]
+        return await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup([buttons, cancel]))
+
+    mine = len(await _target_user_ids())
+    buttons = [InlineKeyboardButton("✅ This Bot Only", callback_data=f"bc_yes:{token}")]
+    try:
+        online, offline = await _online_bots()
+    except Exception:
+        online, offline = [], []
+    text = (
+        "<b>👆 BROADCAST PREVIEW</b>\n" + line + "\n"
+        f"📦 <b>{what}</b>\n\n"
+        "🎯 <b>SEND TO</b>\n"
+        f" • <b>This Bot</b>  →  <b>{mine}</b> {_users(mine)}"
     )
+    if len(online) > 1:
+        rows, total = [], 0
+        for d in online:
+            count = await db.col.count_documents({"bot_id": d["_id"]})
+            total += count
+            rows.append(f" ✅ @{html.escape(str(d.get('username') or d['_id']))}  —  <b>{count}</b> {_users(count)}")
+        for d in offline:
+            rows.append(f" ⛔ @{html.escape(str(d.get('username') or d['_id']))}  —  offline (skipped)")
+        text += f"\n • <b>All Bots</b>  →  <b>{total}</b> {_users(total)}  ({len(online)} online)\n\n"
+        text += "🤖 <b>ONLINE BOTS</b>\n" + "\n".join(rows)
+        buttons.append(InlineKeyboardButton(f"📣 All Bots ({len(online)})", callback_data=f"bc_all:{token}"))
+    text += "\n\n<b>⚠️ Check once — sending can't be undone.</b>"
+    await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup([buttons, cancel]))
 
 
 @Client.on_message(filters.command("broadcast") & dynamic_admin_filter("can_broadcast"))
@@ -402,20 +412,36 @@ async def _send_all(bot, user_ids, units, on_progress=None, every=20):
     return counts
 
 
+def _bot_text(c, total, final, secs):
+    bar, pct = _bar(c["done"], total)
+    ok = int(c["success"] * 100 / total) if total else 0
+    head = "<b>✅ BROADCAST COMPLETED</b>" if final else "<b>📣 BROADCASTING…</b>"
+    body = (
+        f"{head}\n━━━━━━━━━━━━━━━━━━\n"
+        f"<code>{bar}</code>  <b>{pct}%</b>\n"
+        f"⏱ {_dur(secs)}\n\n"
+        "<b>📊 SUMMARY</b>\n"
+        f"👥 Total      <b>{total}</b>\n"
+        f"✅ Success    <b>{c['success']}</b>  ({ok}%)\n"
+        f"🚫 Blocked    <b>{c['blocked']}</b>\n"
+        f"🗑 Deleted    <b>{c['deleted']}</b>\n"
+        f"❌ Failed     <b>{c['failed']}</b>"
+    )
+    return body
+
+
 async def _run_broadcast(bot, sts, units):
     async with _RUN_LOCK:
         user_ids = await _target_user_ids()
         start_time = time.time()
         total_users = len(user_ids)
-        await sts.edit_text("<b>Broadcasting your messages...</b>")
+        await sts.edit_text("<b>📣 BROADCASTING…</b>")
 
         async def _progress(c):
-            await sts.edit_text(f"Broadcast in progress:\n\nTotal Users {total_users}\nCompleted: {c['done']} / {total_users}\nSuccess: {c['success']}\nBlocked: {c['blocked']}\nDeleted: {c['deleted']}\nFailed: {c['failed']}")
+            await sts.edit_text(_bot_text(c, total_users, False, time.time() - start_time))
 
         c = await _send_all(bot, user_ids, units, _progress)
-
-        time_taken = datetime.timedelta(seconds=int(time.time() - start_time))
-        await sts.edit_text(f"Broadcast Completed:\nCompleted in {time_taken} seconds.\n\nTotal Users {total_users}\nCompleted: {c['done']} / {total_users}\nSuccess: {c['success']}\nBlocked: {c['blocked']}\nDeleted: {c['deleted']}\nFailed: {c['failed']}")
+        await sts.edit_text(_bot_text(c, total_users, True, time.time() - start_time))
 
 
 # ======================================================================
