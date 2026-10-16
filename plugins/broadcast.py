@@ -477,7 +477,12 @@ async def _stage_units(bot, units):
         while True:
             try:
                 if len(unit) == 1:
-                    sent = await unit[0].copy(STAGE_CHAT)
+                    from TechVJ.bot import NO_SIGN
+                    tok = NO_SIGN.set(True)  # staged copy must be exactly what the admin sent
+                    try:
+                        sent = await unit[0].copy(STAGE_CHAT)
+                    finally:
+                        NO_SIGN.reset(tok)
                     ids = [sent.id]
                 else:
                     res = await bot.forward_messages(
