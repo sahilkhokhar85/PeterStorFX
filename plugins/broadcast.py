@@ -629,7 +629,7 @@ def _all_text(job, final, detail=True):
     issues = any(p["state"] in ("skipped", "lost", "failed") for p in parts)
     ok_pct = int(total["success"] * 100 / total["total"]) if total["total"] else 0
     lines = [
-        "⚠️ BROADCAST COMPLETED WITH ISSUES !!" if issues else "✅ BROADCAST COMPLETED !!",
+        "⚠️ BROADCAST COMPLETED WITH ISSUES !!" if issues else "✅ BROADCAST COMPLETED",
         "",
         _bar_line(total["done"], total["total"]),
         f"⏱ Time: {secs} · 🤖 Bots: {len(parts)}",
