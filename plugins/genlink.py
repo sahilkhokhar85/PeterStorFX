@@ -271,12 +271,12 @@ async def post_links_to_log(bot, reply_to_id, admin, info_lines, permanent_link,
     lines = ["<b>🔗 Links For The Message Above</b>", ""]
     lines += info_lines
     if admin:
-        lines.append(f"👤 By: {admin.mention} (<code>{admin.id}</code>)")
+        lines.append(f"<b>👤 By: {admin.mention} (</b><code>{admin.id}</code><b>)</b>")
     lines.append("")
     if permanent_link:
-        lines.append(f"🔗 Permanent: {html.escape(permanent_link)}")
+        lines.append(f"<b>🔗 Permanent: {html.escape(permanent_link)}</b>")
     if share_link:
-        lines.append(f"🖇 Original: {html.escape(share_link)}")
+        lines.append(f"<b>🖇 Original: {html.escape(share_link)}</b>")
     text = "\n".join(lines)
     try:
         try:
@@ -323,8 +323,8 @@ async def build_link_reply(source_message, bot=None, admin=None):
         await post_links_to_log(
             bot, stored_id, admin,
             [
-                f"🎬 File: <code>{html.escape(name)}</code>",
-                f"📦 Size: {_human_size(size)}",
+                f"<b>🎬 File:</b> <code>{html.escape(name)}</code>",
+                f"<b>📦 Size: {_human_size(size)}</b>",
             ],
             permanent_link, share_link,
         )
@@ -484,8 +484,8 @@ async def ask_batch_reference(bot, chat_id, prompt):
     if not ref:
         await answer.reply(
             bold(
-                "❌ Couldn't read that. Forward the message "
-                "with its forward tag or send its Telegram link."
+                "❌ Couldn't Read That. Forward It With Tag Or Send Its Link.\n"
+                "/cancel - Stop"
             )
         )
         return None
@@ -708,9 +708,9 @@ async def gen_link_batch(bot, message):
         first_ref = await ask_batch_reference(
             bot,
             message.chat.id,
-            "Forward The Batch First Message From your Batch Channel "
-            "(With Forward Tag).. or Give Me Batch First Message link "
-            "from your batch channel",
+            "📦 Send The First Message Of Your Batch.\n\n"
+            "Forward It With Tag, Or Send Its Link.\n"
+            "/cancel - Stop",
         )
 
         if first_ref is None:
@@ -721,9 +721,9 @@ async def gen_link_batch(bot, message):
         last_ref = await ask_batch_reference(
             bot,
             message.chat.id,
-            "Forward The Batch Last Message From Your Batch Channel "
-            "(With Forward Tag).. or Give Me Batch last message link "
-            "from your batch channel",
+            "📦 Send The Last Message Of Your Batch.\n\n"
+            "Forward It With Tag, Or Send Its Link.\n"
+            "/cancel - Stop",
         )
 
         if last_ref is None:
@@ -881,10 +881,10 @@ async def gen_link_batch(bot, message):
         await post_links_to_log(
             bot, post.id, message.from_user,
             [
-                f"📦 Batch: <code>{len(outlist)}</code> files"
-                + (f" ({kept} kept in source)" if kept else ""),
-                f"📺 Source: {html.escape(source_title)} (<code>{source_id}</code>), "
-                f"messages {first_msg_id} to {last_msg_id}",
+                f"<b>📦 Batch:</b> <code>{len(outlist)}</code> <b>files"
+                + (f" ({kept} kept in source)" if kept else "") + "</b>",
+                f"<b>📺 Source: {html.escape(source_title)} (</b><code>{source_id}</code><b>), "
+                f"messages {first_msg_id} to {last_msg_id}</b>",
             ],
             permanent_link, share_link,
         )
