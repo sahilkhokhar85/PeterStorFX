@@ -146,12 +146,12 @@ async def bot_status(client, message: Message):
         cpu = ram = 0
     uptime = get_readable_time(int(time.time() - BOT_START_TIME))
     text = (
-        "<b>🤖 BOT STATUS</b>\n\n"
-        f"👤 Users - <code>{total_users}</code>\n"
-        f"🚫 Ban Users - <code>{total_banned}</code>\n"
-        f"⚙️ CPU - <code>{cpu}%</code>\n"
-        f"💾 RAM - <code>{ram}%</code>\n"
-        f"⚡ Uptime - <code>{uptime}</code>"
+        "<b>🤖 BOT STATUS !!</b>\n\n"
+        f"<b>👤 Users -</b> <code>{total_users}</code>\n"
+        f"<b>🚫 Ban Users -</b> <code>{total_banned}</code>\n"
+        f"<b>⚙️ CPU -</b> <code>{cpu}%</code>\n"
+        f"<b>💾 RAM -</b> <code>{ram}%</code>\n"
+        f"<b>⚡ Uptime -</b> <code>{uptime}</code>"
     )
     await message.reply_text(text)
 
