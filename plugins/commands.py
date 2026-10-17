@@ -279,8 +279,8 @@ async def start(client, message):
                     queue_report(
                         client,
                         f"<b>📥 #FileAccess</b>\n\n"
-                        f"👤 User: {message.from_user.mention} (<code>{message.from_user.id}</code>)\n"
-                        f"🎬 File: <code>{title}</code>",
+                        f"<b>👤 User: {message.from_user.mention} (</b><code>{message.from_user.id}</code><b>)</b>\n\n"
+                        f"<b>🎬 File:</b> <code>{title}</code>",
                         [(msg, None, None)],
                     )
 
@@ -491,18 +491,18 @@ async def start(client, message):
         try:
             if titles:
                 shown = titles[:30]
-                files_list = "\n".join(f"{i+1}. <code>{t}</code>" for i, t in enumerate(shown))
+                files_list = "\n".join(f"<b>{i+1}.</b> <code>{t}</code>" for i, t in enumerate(shown))
                 if len(titles) > 30:
-                    files_list += f"\n... and {len(titles) - 30} more"
+                    files_list += f"\n<b>... and {len(titles) - 30} more</b>"
             else:
                 files_list = "N/A"
             queue_report(
                 client,
                 f"<b>📥 #FileAccess (Batch)</b>\n\n"
-                f"👤 User: {message.from_user.mention} (<code>{message.from_user.id}</code>)\n"
-                f"📦 Files Accessed: <code>{len(filesarr)}</code>\n\n"
+                f"<b>👤 User: {message.from_user.mention} (</b><code>{message.from_user.id}</code><b>)</b>\n\n"
+                f"<b>📦 Files Accessed:</b> <code>{len(filesarr)}</code>\n\n"
                 f"{files_list}\n\n"
-                f"⬇️ ᴀᴄᴛᴜᴀʟ ꜰɪʟᴇꜱ ʙᴇʟᴏᴡ",
+                f"<b>⬇️ ᴀᴄᴛᴜᴀʟ ꜰɪʟᴇꜱ ʙᴇʟᴏᴡ</b>",
                 report_items,
             )
         except:
@@ -685,8 +685,8 @@ async def start(client, message):
             queue_report(
                 client,
                 f"<b>📥 #FileAccess</b>\n\n"
-                f"👤 User: {message.from_user.mention} (<code>{message.from_user.id}</code>)\n"
-                f"🎬 File: <code>{title}</code>",
+                f"<b>👤 User: {message.from_user.mention} (</b><code>{message.from_user.id}</code><b>)</b>\n\n"
+                f"<b>🎬 File:</b> <code>{title}</code>",
                 [(msg, rep_caption, rep_markup)],
             )
         except:
