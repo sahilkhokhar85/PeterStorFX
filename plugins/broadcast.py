@@ -145,8 +145,8 @@ async def _make_preview(bot, admin_id, chat_id, units, target=None):
     if target:
         text = (
             "<b>👆 SEND PREVIEW</b>\n" + line + "\n"
-            f"📦 <b>{what}</b>\n\n"
-            f"🎯 <b>SEND TO</b>\n • User <code>{target}</code> only\n\n"
+            f"📦 <b>Content:</b> {what}\n\n"
+            f"🎯 <b>SEND TO</b>\n • <b>User:</b> <code>{target}</code> only\n\n"
             "<b>⚠️ Check once — sending can't be undone.</b>"
         )
         buttons = [InlineKeyboardButton("✅ Confirm Send", callback_data=f"bc_yes:{token}")]
@@ -160,19 +160,19 @@ async def _make_preview(bot, admin_id, chat_id, units, target=None):
         online, offline = [], []
     text = (
         "<b>👆 BROADCAST PREVIEW</b>\n" + line + "\n"
-        f"📦 <b>{what}</b>\n\n"
+        f"📦 <b>Content:</b> {what}\n\n"
         "🎯 <b>SEND TO</b>\n"
-        f" • <b>This Bot</b>  →  <b>{mine}</b> {_users(mine)}"
+        f" • <b>This Bot</b>  →  {mine} {_users(mine)}"
     )
     if len(online) > 1:
         rows, total = [], 0
         for d in online:
             count = await db.col.count_documents({"bot_id": d["_id"]})
             total += count
-            rows.append(f" ✅ @{html.escape(str(d.get('username') or d['_id']))}  —  <b>{count}</b> {_users(count)}")
+            rows.append(f" ✅ @{html.escape(str(d.get('username') or d['_id']))}  —  {count} {_users(count)}")
         for d in offline:
             rows.append(f" ⛔ @{html.escape(str(d.get('username') or d['_id']))}  —  offline (skipped)")
-        text += f"\n • <b>All Bots</b>  →  <b>{total}</b> {_users(total)}  ({len(online)} online)\n\n"
+        text += f"\n • <b>All Bots</b>  →  {total} {_users(total)}  ({len(online)} online)\n\n"
         text += "🤖 <b>ONLINE BOTS</b>\n" + "\n".join(rows)
         buttons.append(InlineKeyboardButton(f"📣 All Bots ({len(online)})", callback_data=f"bc_all:{token}"))
     text += "\n\n<b>⚠️ Check once — sending can't be undone.</b>"
@@ -418,14 +418,14 @@ def _bot_text(c, total, final, secs):
     head = "<b>✅ BROADCAST COMPLETED</b>" if final else "<b>📣 BROADCASTING…</b>"
     body = (
         f"{head}\n━━━━━━━━━━━━━━━━━━\n"
-        f"<code>{bar}</code>  <b>{pct}%</b>\n"
-        f"⏱ {_dur(secs)}\n\n"
+        f"<code>{bar}</code>  {pct}%\n"
+        f"⏱ <b>Time:</b> {_dur(secs)}\n\n"
         "<b>📊 SUMMARY</b>\n"
-        f"👥 Total      <b>{total}</b>\n"
-        f"✅ Success    <b>{c['success']}</b>  ({ok}%)\n"
-        f"🚫 Blocked    <b>{c['blocked']}</b>\n"
-        f"🗑 Deleted    <b>{c['deleted']}</b>\n"
-        f"❌ Failed     <b>{c['failed']}</b>"
+        f"👥 <b>Total:</b> {total}\n"
+        f"✅ <b>Success:</b> {c['success']} ({ok}%)\n"
+        f"🚫 <b>Blocked:</b> {c['blocked']}\n"
+        f"🗑 <b>Deleted:</b> {c['deleted']}\n"
+        f"❌ <b>Failed:</b> {c['failed']}"
     )
     return body
 
@@ -615,23 +615,23 @@ def _all_text(job, final, detail=True):
     if not final:
         return (
             "<b>📣 ALL BOTS BROADCAST</b>\n" + line + "\n"
-            f"<b>⏳ Running… {total['done']}/{total['total']}</b>\n\n"
-            f"<code>{bar}</code>  <b>{pct}%</b>\n\n"
-            + "\n".join(_part_line(p) for p in parts) + f"\n\n⏱ {secs}"
+            f"⏳ <b>Running:</b> {total['done']}/{total['total']}\n\n"
+            f"<code>{bar}</code>  {pct}%\n\n"
+            + "\n".join(_part_line(p) for p in parts) + f"\n\n⏱ <b>Time:</b> {secs}"
         )
     issues = any(p["state"] in ("skipped", "lost", "failed") for p in parts)
     head = "⚠️ BROADCAST COMPLETED WITH ISSUES" if issues else "✅ BROADCAST COMPLETED"
     ok_pct = int(total["success"] * 100 / total["total"]) if total["total"] else 0
     text = (
         f"<b>{head}</b>\n" + line + "\n"
-        f"<code>{bar}</code>  <b>{pct}%</b>\n"
-        f"⏱ {secs}  •  🤖 {len(parts)} Bots\n\n"
+        f"<code>{bar}</code>  {pct}%\n"
+        f"⏱ <b>Time:</b> {secs}  ·  🤖 <b>Bots:</b> {len(parts)}\n\n"
         "<b>📊 SUMMARY</b>\n"
-        f"👥 Total      <b>{total['total']}</b>\n"
-        f"✅ Success    <b>{total['success']}</b>  ({ok_pct}%)\n"
-        f"🚫 Blocked    <b>{total['blocked']}</b>\n"
-        f"🗑 Deleted    <b>{total['deleted']}</b>\n"
-        f"❌ Failed     <b>{total['failed']}</b>"
+        f"👥 <b>Total:</b> {total['total']}\n"
+        f"✅ <b>Success:</b> {total['success']} ({ok_pct}%)\n"
+        f"🚫 <b>Blocked:</b> {total['blocked']}\n"
+        f"🗑 <b>Deleted:</b> {total['deleted']}\n"
+        f"❌ <b>Failed:</b> {total['failed']}"
     )
     if issues and not detail:
         bad = sum(1 for p in parts if p["state"] in ("skipped", "lost", "failed"))
