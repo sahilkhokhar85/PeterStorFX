@@ -24,7 +24,7 @@ class StreamXBot(Client):
         if chat_id == REPORT_CHANNEL and isinstance(text, str) and not NO_SIGN.get():
             username = getattr(self.me, "username", None) if getattr(self, "me", None) else None
             if username:
-                text = f"{text}\n\n<b>🤖 Bot:</b> @{username}"
+                text = f"{text.rstrip()}\n\n<b>🤖 Bot: @{username}</b>"
         return await super().send_message(chat_id, text, *args, **kwargs)
 
     async def iter_messages(
