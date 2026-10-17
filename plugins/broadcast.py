@@ -417,7 +417,7 @@ async def _send_all(bot, user_ids, units, on_progress=None, every=20):
 def _bot_text(c, total, final, secs):
     ok = int(c["success"] * 100 / total) if total else 0
     return _bold([
-        "✅ BROADCAST COMPLETED !!" if final else "📣 BROADCASTING…",
+        "✅ BROADCAST COMPLETED" if final else "📣 BROADCASTING…",
         "",
         _bar_line(c["done"], total),
         f"⏱ Time: {_dur(secs)}",
