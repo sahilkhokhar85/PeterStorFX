@@ -15,12 +15,12 @@ from plugins.admins_db import dynamic_admin_filter, is_admin, has_permission, ge
 
 def main_menu_text(settings):
     last_used = readable_ago(settings.get("last_used"))
+    fsub = "ON ✅" if settings.get("force_sub") else "OFF ❌"
     return (
-        "⚙️ <b>ʙᴏᴛ ꜱᴇᴛᴛɪɴɢꜱ ᴘᴀɴᴇʟ</b>\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
-        "🍿 <i>Manage force subscribe, admins and bot status from here.</i>\n\n"
-        f"⏰ <b>Last Used :</b> {last_used} ago\n\n"
-        "👇 <b>Choose an option below</b>"
+        "<b>⚙️ BOT SETTINGS !!</b>\n\n"
+        f"<b>📢 Force Subscribe: {fsub}</b>\n"
+        f"<b>⏰ Last Used: {last_used} ago</b>\n\n"
+        "<b>👇 Choose An Option Below</b>"
     )
 
 
@@ -90,12 +90,12 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
             cpu = ram = 0
         uptime = get_readable_time(int(time.time() - BOT_START_TIME))
         text = (
-            "<b>🤖 BOT STATUS</b>\n\n"
-            f"👤 Users - <code>{total_users}</code>\n"
-            f"🚫 Ban Users - <code>{total_banned}</code>\n"
-            f"⚙️ CPU - <code>{cpu}%</code>\n"
-            f"💾 RAM - <code>{ram}%</code>\n"
-            f"⚡ Uptime - <code>{uptime}</code>"
+            "<b>🤖 BOT STATUS !!</b>\n\n"
+            f"<b>👤 Users -</b> <code>{total_users}</code>\n"
+            f"<b>🚫 Ban Users -</b> <code>{total_banned}</code>\n"
+            f"<b>⚙️ CPU -</b> <code>{cpu}%</code>\n"
+            f"<b>💾 RAM -</b> <code>{ram}%</code>\n"
+            f"<b>⚡ Uptime -</b> <code>{uptime}</code>"
         )
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")]]
