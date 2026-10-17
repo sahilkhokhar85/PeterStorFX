@@ -140,11 +140,10 @@ async def _make_preview(bot, admin_id, chat_id, units, target=None):
     n = len(units)
     what = "1 Message" if n == 1 and len(units[0]) == 1 else (
         f"1 Album · {len(units[0])} Items" if n == 1 else f"{n} Messages (In Order)")
-    line = "━━━━━━━━━━━━━━━━━━"
     cancel = [InlineKeyboardButton("❌ Cancel", callback_data=f"bc_no:{token}")]
     if target:
         text = (
-            "<b>👆 SEND PREVIEW !!</b>\n<b>" + line + "</b>\n"
+            "<b>👆 SEND PREVIEW !!</b>\n\n"
             f"<b>📦 Content: {what}</b>\n\n"
             f"<b>👤 User:</b> <code>{target}</code> <b>only</b>\n\n"
             "<b>⚠️ Check Once — Sending can't be undone.</b>"
@@ -160,7 +159,7 @@ async def _make_preview(bot, admin_id, chat_id, units, target=None):
         online, offline = [], []
     lines = [
         "👆 BROADCAST PREVIEW !!",
-        line,
+        "",
         f"📦 Content: {what}",
         "",
         f"✅ This Bot Only: {mine} {_users(mine)}",
@@ -416,21 +415,20 @@ async def _send_all(bot, user_ids, units, on_progress=None, every=20):
 
 
 def _bot_text(c, total, final, secs):
-    bar, pct = _bar(c["done"], total)
     ok = int(c["success"] * 100 / total) if total else 0
-    head = "<b>✅ BROADCAST COMPLETED</b>" if final else "<b>📣 BROADCASTING…</b>"
-    body = (
-        f"{head}\n━━━━━━━━━━━━━━━━━━\n"
-        f"<code>{bar}</code>  {pct}%\n"
-        f"⏱ <b>Time:</b> {_dur(secs)}\n\n"
-        "<b>📊 SUMMARY</b>\n"
-        f"👥 <b>Total:</b> {total}\n"
-        f"✅ <b>Success:</b> {c['success']} ({ok}%)\n"
-        f"🚫 <b>Blocked:</b> {c['blocked']}\n"
-        f"🗑 <b>Deleted:</b> {c['deleted']}\n"
-        f"❌ <b>Failed:</b> {c['failed']}"
-    )
-    return body
+    return _bold([
+        "✅ BROADCAST COMPLETED" if final else "📣 BROADCASTING…",
+        "",
+        _bar_line(c["done"], total),
+        f"⏱ Time: {_dur(secs)}",
+        "",
+        "📊 SUMMARY",
+        f"👥 Total: {total}",
+        f"✅ Success: {c['success']} ({ok}%)",
+        f"🚫 Blocked: {c['blocked']}",
+        f"🗑 Deleted: {c['deleted']}",
+        f"❌ Failed: {c['failed']}",
+    ])
 
 
 async def _run_broadcast(bot, sts, units):
@@ -561,6 +559,16 @@ async def _start_all_job(bot, sts, units):
     _spawn(_watch_job(bot, sts, token))
 
 
+def _bold(lines):
+    """Every non-empty line bold. The progress bar line is <code> (monospace), which Telegram can't bold."""
+    return "\n".join("" if not l else (l if l.startswith("<code>") else f"<b>{l}</b>") for l in lines)
+
+
+def _bar_line(done, total):
+    bar, pct = _bar(done, total)
+    return f"<code>{bar}</code> <b>{pct}%</b>"
+
+
 def _bar(done, total, width=10):
     pct = int(done * 100 / total) if total else 0
     filled = round(width * pct / 100)
@@ -598,50 +606,51 @@ def _part_line(part):
 
 
 def _part_full(part):
-    """Per-bot block for the final result: the same numbers as the summary, for one bot."""
-    state = part.get("state")
+    """Per-bot block for the final result: the same numbers as the summary, for one bot (2 lines)."""
+    if part.get("state") != "done":
+        return [_part_line(part)]
     name = "@" + html.escape(part.get("username") or "?")
-    if state != "done":
-        return _part_line(part)
     ok = int(part["success"] * 100 / part["total"]) if part["total"] else 0
-    return (f"✅ <b>{name}</b>\n"
+    return [f"✅ {name}",
             f"   👥 {part['total']} · ✅ {part['success']} ({ok}%) · "
-            f"🚫 {part['blocked']} · 🗑 {part['deleted']} · ❌ {part['failed']}")
+            f"🚫 {part['blocked']} · 🗑 {part['deleted']} · ❌ {part['failed']}"]
 
 
 def _all_text(job, final, detail=True):
     parts = list(job["parts"].values())
     total = {k: sum(p.get(k, 0) for p in parts) for k in _ZERO}
-    bar, pct = _bar(total["done"], total["total"])
     secs = _dur(job.get("finished", time.time()) - job["created"])
-    line = "━━━━━━━━━━━━━━━━━━"
     if not final:
-        return (
-            "<b>📣 ALL BOTS BROADCAST</b>\n" + line + "\n"
-            f"⏳ <b>Running:</b> {total['done']}/{total['total']}\n\n"
-            f"<code>{bar}</code>  {pct}%\n\n"
-            + "\n".join(_part_line(p) for p in parts) + f"\n\n⏱ <b>Time:</b> {secs}"
+        return _bold(
+            ["📣 ALL BOTS BROADCAST", "", f"⏳ Running: {total['done']}/{total['total']}", "",
+             _bar_line(total["done"], total["total"]), ""]
+            + [_part_line(p) for p in parts] + ["", f"⏱ Time: {secs}"]
         )
     issues = any(p["state"] in ("skipped", "lost", "failed") for p in parts)
-    head = "⚠️ BROADCAST COMPLETED WITH ISSUES" if issues else "✅ BROADCAST COMPLETED"
     ok_pct = int(total["success"] * 100 / total["total"]) if total["total"] else 0
-    text = (
-        f"<b>{head}</b>\n" + line + "\n"
-        f"<code>{bar}</code>  {pct}%\n"
-        f"⏱ <b>Time:</b> {secs}  ·  🤖 <b>Bots:</b> {len(parts)}\n\n"
-        "<b>📊 SUMMARY</b>\n"
-        f"👥 <b>Total:</b> {total['total']}\n"
-        f"✅ <b>Success:</b> {total['success']} ({ok_pct}%)\n"
-        f"🚫 <b>Blocked:</b> {total['blocked']}\n"
-        f"🗑 <b>Deleted:</b> {total['deleted']}\n"
-        f"❌ <b>Failed:</b> {total['failed']}"
-    )
+    lines = [
+        "⚠️ BROADCAST COMPLETED WITH ISSUES" if issues else "✅ BROADCAST COMPLETED",
+        "",
+        _bar_line(total["done"], total["total"]),
+        f"⏱ Time: {secs} · 🤖 Bots: {len(parts)}",
+        "",
+        "📊 SUMMARY",
+        f"👥 Total: {total['total']}",
+        f"✅ Success: {total['success']} ({ok_pct}%)",
+        f"🚫 Blocked: {total['blocked']}",
+        f"🗑 Deleted: {total['deleted']}",
+        f"❌ Failed: {total['failed']}",
+    ]
     if issues and not detail:
         bad = sum(1 for p in parts if p["state"] in ("skipped", "lost", "failed"))
-        text += f"\n\n⚠️ {bad} Bot(s) Did Not Finish — Tap Bot-wise"
+        lines += ["", f"⚠️ {bad} Bot(s) Did Not Finish — Tap Bot-wise"]
     if detail:
-        text += "\n\n<b>🤖 BOT-WISE</b>\n" + "\n\n".join(_part_full(p) for p in parts)
-    return text
+        lines += ["", "🤖 BOT-WISE", ""]
+        for i, p in enumerate(parts):
+            if i:
+                lines.append("")
+            lines += _part_full(p)
+    return _bold(lines)
 
 
 def _final_markup(token, detail):
