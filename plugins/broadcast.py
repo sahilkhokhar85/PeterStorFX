@@ -417,7 +417,7 @@ async def _send_all(bot, user_ids, units, on_progress=None, every=20):
 def _bot_text(c, total, final, secs):
     ok = int(c["success"] * 100 / total) if total else 0
     return _bold([
-        "✅ BROADCAST COMPLETED" if final else "📣 BROADCASTING…",
+        "✅ BROADCAST COMPLETED !!" if final else "📣 BROADCASTING…",
         "",
         _bar_line(c["done"], total),
         f"⏱ Time: {_dur(secs)}",
@@ -629,7 +629,7 @@ def _all_text(job, final, detail=True):
     issues = any(p["state"] in ("skipped", "lost", "failed") for p in parts)
     ok_pct = int(total["success"] * 100 / total["total"]) if total["total"] else 0
     lines = [
-        "⚠️ BROADCAST COMPLETED WITH ISSUES !!" if issues else "✅ BROADCAST COMPLETED",
+        "⚠️ BROADCAST COMPLETED WITH ISSUES !!" if issues else "✅ BROADCAST COMPLETED !!",
         "",
         _bar_line(total["done"], total["total"]),
         f"⏱ Time: {secs} · 🤖 Bots: {len(parts)}",
@@ -645,7 +645,7 @@ def _all_text(job, final, detail=True):
         bad = sum(1 for p in parts if p["state"] in ("skipped", "lost", "failed"))
         lines += ["", f"⚠️ {bad} Bot(s) Did Not Finish — Tap Bot-wise"]
     if detail:
-        lines += ["", "🤖 BOT-WISE", ""]
+        lines += ["", "🤖 BOT-WISE STATUS !!", ""]
         for i, p in enumerate(parts):
             if i:
                 lines.append("")
