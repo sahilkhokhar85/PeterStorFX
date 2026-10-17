@@ -200,10 +200,9 @@ async def broadcast_cmd(bot, message):
 
     _WAITING[admin_id] = {"t": time.time(), "msgs": [], "ack": None, "target": None}
     await message.reply_text(
-        "<b>📣 Send The Messages You Want To Broadcast, One By One.</b>\n"
-        "Text, photo, video, file, sticker, a whole album, anything works.\n\n"
-        "<b>/done</b> When Finished (You Will Get A Preview First)\n"
-        "<b>/cancel</b> To Stop"
+        "<b>📣 Send Your Messages One By One.\n\n"
+        "/done - Preview\n"
+        "/cancel - Stop</b>"
     )
 
 
@@ -219,13 +218,13 @@ async def send_cmd(bot, message):
     if not (arg.isdigit() and 5 <= len(arg) <= 16):
         return await message.reply_text(
             "<b>Usage:</b>\n"
-            "<code>/send user_id</code>, Then Send Your Messages, Then /done\n"
-            "Or Reply To A Message With <code>/send user_id</code>"
+            "<code>/send user_id</code> <b>- Then Send Your Messages, Then /done</b>\n"
+            "<b>Or Reply To A Message With</b> <code>/send user_id</code>"
         )
     target = int(arg)
     if await db.is_user_banned(target):
         return await message.reply_text(
-            "<b>🚫 This User Is Banned.</b>\nUse /unban First If You Really Want To Message Them."
+            "<b>🚫 This User Is Banned.\nUse /unban First If You Really Want To Message Them.</b>"
         )
 
     replied = message.reply_to_message
@@ -240,10 +239,9 @@ async def send_cmd(bot, message):
 
     _WAITING[admin_id] = {"t": time.time(), "msgs": [], "ack": None, "target": target}
     await message.reply_text(
-        f"<b>📨 Send The Messages For User</b> <code>{target}</code><b>, One By One.</b>\n"
-        "Text, photo, video, file, sticker, a whole album, anything works.\n\n"
-        "<b>/done</b> When Finished (You Will Get A Preview First)\n"
-        "<b>/cancel</b> To Stop"
+        f"<b>📨 Send Your Messages For User</b> <code>{target}</code><b>, One By One.\n\n"
+        "/done - Preview\n"
+        "/cancel - Stop</b>"
     )
 
 
@@ -256,8 +254,9 @@ async def _ack(admin_id, chat_id, bot, delay):
     units = _to_units(state["msgs"])
     await bot.send_message(
         chat_id,
-        f"<b>✅ Added. {len(units)} Message(s) Ready.</b>\n"
-        "Send More, Or <b>/done</b> To Preview, <b>/cancel</b> To Stop.",
+        f"<b>✅ {len(units)} Message(s) Ready.\n\n"
+        "/done - Preview\n"
+        "/cancel - Stop</b>",
     )
 
 
