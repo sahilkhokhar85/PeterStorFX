@@ -72,17 +72,15 @@ Welcome To ChillFliz File Store Bot! ✨❤️
 🔻 /broadcast - ʀᴇᴘʟʏ ᴛᴏ ᴛʜɪs ᴄᴏᴍᴍᴀɴᴅ ᴛᴏ ᴀ ᴍᴇssᴀɢᴇ ᴛᴏ ʙʀᴏᴀᴅᴄᴀsᴛ (ʙᴏᴛ ᴏᴡɴᴇʀ ᴏɴʟʏ)</b>"""
 
 
-    LOG_TEXT = """<b>#NewUser
-    
-ID - <code>{}</code>
+    LOG_TEXT = """<b>#NewUser</b>
 
-Nᴀᴍᴇ - {}</b>
-"""
-    RESTART_TXT = """
-<b>Bᴏᴛ Rᴇsᴛᴀʀᴛᴇᴅ !
+<b>ID -</b> <code>{}</code>
 
-📅 Dᴀᴛᴇ : <code>{}</code>
-⏰ Tɪᴍᴇ : <code>{}</code>
-🌐 Tɪᴍᴇᴢᴏɴᴇ : <code>Asia/Kolkata</code>
-🛠️ Bᴜɪʟᴅ Sᴛᴀᴛᴜs: <code>v2.7.1 [ Sᴛᴀʙʟᴇ ]</code></b>"""
+<b>Nᴀᴍᴇ - {}</b>"""
+    RESTART_TXT = """<b>Bᴏᴛ Rᴇsᴛᴀʀᴛᴇᴅ !</b>
+
+<b>📅 Dᴀᴛᴇ :</b> <code>{}</code>
+<b>⏰ Tɪᴍᴇ :</b> <code>{}</code>
+<b>🌐 Tɪᴍᴇᴢᴏɴᴇ :</b> <code>Asia/Kolkata</code>
+<b>🛠️ Bᴜɪʟᴅ Sᴛᴀᴛᴜs:</b> <code>v2.7.1 [ Sᴛᴀʙʟᴇ ]</code>"""
 
