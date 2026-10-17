@@ -645,7 +645,7 @@ def _all_text(job, final, detail=True):
         bad = sum(1 for p in parts if p["state"] in ("skipped", "lost", "failed"))
         lines += ["", f"⚠️ {bad} Bot(s) Did Not Finish — Tap Bot-wise"]
     if detail:
-        lines += ["", "🤖 BOT-WISE STATUS !!", ""]
+        lines += ["", "🤖 BOT-WISE !!", ""]
         for i, p in enumerate(parts):
             if i:
                 lines.append("")
