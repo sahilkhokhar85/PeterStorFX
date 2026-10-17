@@ -144,10 +144,10 @@ async def _make_preview(bot, admin_id, chat_id, units, target=None):
     cancel = [InlineKeyboardButton("❌ Cancel", callback_data=f"bc_no:{token}")]
     if target:
         text = (
-            "<b>👆 SEND PREVIEW</b>\n" + line + "\n"
-            f"📦 <b>Content:</b> {what}\n\n"
-            f"🎯 <b>SEND TO</b>\n • <b>User:</b> <code>{target}</code> only\n\n"
-            "<b>⚠️ Check once — sending can't be undone.</b>"
+            "<b>👆 SEND PREVIEW !!</b>\n<b>" + line + "</b>\n"
+            f"<b>📦 Content: {what}</b>\n\n"
+            f"<b>👤 User:</b> <code>{target}</code> <b>only</b>\n\n"
+            "<b>⚠️ Check Once — Sending can't be undone.</b>"
         )
         buttons = [InlineKeyboardButton("✅ Confirm Send", callback_data=f"bc_yes:{token}")]
         return await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup([buttons, cancel]))
@@ -158,24 +158,27 @@ async def _make_preview(bot, admin_id, chat_id, units, target=None):
         online, offline = await _online_bots()
     except Exception:
         online, offline = [], []
-    text = (
-        "<b>👆 BROADCAST PREVIEW</b>\n" + line + "\n"
-        f"📦 <b>Content:</b> {what}\n\n"
-        "🎯 <b>SEND TO</b>\n"
-        f" • <b>This Bot</b>  →  {mine} {_users(mine)}"
-    )
+    lines = [
+        "👆 BROADCAST PREVIEW !!",
+        line,
+        f"📦 Content: {what}",
+        "",
+        f"✅ This Bot Only: {mine} {_users(mine)}",
+    ]
     if len(online) > 1:
         rows, total = [], 0
         for d in online:
             count = await db.col.count_documents({"bot_id": d["_id"]})
             total += count
-            rows.append(f" ✅ @{html.escape(str(d.get('username') or d['_id']))}  —  {count} {_users(count)}")
+            rows.append(f"✅ @{html.escape(str(d.get('username') or d['_id']))} – {count} {_users(count)}")
         for d in offline:
-            rows.append(f" ⛔ @{html.escape(str(d.get('username') or d['_id']))}  —  offline (skipped)")
-        text += f"\n • <b>All Bots</b>  →  {total} {_users(total)}  ({len(online)} online)\n\n"
-        text += "🤖 <b>ONLINE BOTS</b>\n" + "\n".join(rows)
+            rows.append(f"⛔ @{html.escape(str(d.get('username') or d['_id']))} – Offline (Skipped)")
+        lines.append(f"📣 All Bots: {total} {_users(total)} ({len(online)} online)")
+        lines += ["", "🤖 ONLINE BOTS !!", ""] + rows
         buttons.append(InlineKeyboardButton(f"📣 All Bots ({len(online)})", callback_data=f"bc_all:{token}"))
-    text += "\n\n<b>⚠️ Check once — sending can't be undone.</b>"
+    lines += ["", "⚠️ Check Once — Sending can't be undone."]
+    # the whole message is bold (empty lines stay empty)
+    text = "\n".join(f"<b>{l}</b>" if l else "" for l in lines)
     await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup([buttons, cancel]))
 
 
