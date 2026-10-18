@@ -9,7 +9,7 @@ COPY requirements.txt /requirements.txt
 RUN pip install --upgrade pip
 RUN pip install -r /requirements.txt
 
-WORKDIR /VJ-File-Store
+WORKDIR /Peter-File-Store
 COPY . .
 
 CMD ["python", "bot.py"]
