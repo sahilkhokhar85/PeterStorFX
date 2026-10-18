@@ -117,6 +117,26 @@ def _clean_old_jobs():
         _JOBS.pop(token, None)
 
 
+async def _user_label(bot, uid):
+    """'Name (id)' for the /send messages. The name comes from the users saved by any bot, else from
+    Telegram; if neither knows it, only the id is shown."""
+    name = ""
+    try:
+        doc = await db.col.find_one({"id": int(uid)})
+        name = str((doc or {}).get("name") or "").strip()
+    except Exception:
+        pass
+    if not name:
+        try:
+            u = await bot.get_users(int(uid))
+            name = " ".join(x for x in (u.first_name, u.last_name) if x).strip()
+        except Exception:
+            pass
+    if name:
+        return f"<b>{html.escape(name)} (</b><code>{uid}</code><b>)</b>"
+    return f"<code>{uid}</code>"
+
+
 def _users(n):
     return "User" if n == 1 else "Users"
 
@@ -145,7 +165,7 @@ async def _make_preview(bot, admin_id, chat_id, units, target=None):
         text = (
             "<b>👆 SEND PREVIEW !!</b>\n\n"
             f"<b>📦 Content: {what}</b>\n\n"
-            f"<b>👤 User:</b> <code>{target}</code> <b>only</b>\n\n"
+            f"<b>👤 User:</b> {await _user_label(bot, target)} <b>only</b>\n\n"
             "<b>⚠️ Check Once — Sending can't be undone.</b>"
         )
         buttons = [InlineKeyboardButton("✅ Confirm Send", callback_data=f"bc_yes:{token}")]
@@ -217,14 +237,13 @@ async def send_cmd(bot, message):
     arg = message.command[1] if len(message.command) > 1 else ""
     if not (arg.isdigit() and 5 <= len(arg) <= 16):
         return await message.reply_text(
-            "<b>Usage:</b>\n"
-            "<code>/send user_id</code> <b>- Then Send Your Messages, Then /done</b>\n"
-            "<b>Or Reply To A Message With</b> <code>/send user_id</code>"
+            "<b>📨 Usage:</b> <code>/send user_id</code>\n"
+            "<b>Or Reply To A Message With It.</b>"
         )
     target = int(arg)
     if await db.is_user_banned(target):
         return await message.reply_text(
-            "<b>🚫 This User Is Banned.\nUse /unban First If You Really Want To Message Them.</b>"
+            "<b>🚫 This User Is Banned.\n/unban First To Message Them.</b>"
         )
 
     replied = message.reply_to_message
@@ -239,7 +258,7 @@ async def send_cmd(bot, message):
 
     _WAITING[admin_id] = {"t": time.time(), "msgs": [], "ack": None, "target": target}
     await message.reply_text(
-        f"<b>📨 Send Your Messages For User</b> <code>{target}</code><b>, One By One.\n\n"
+        f"<b>📨 Send Your Messages To</b> {await _user_label(bot, target)}<b>.\n\n"
         "/done - Preview\n"
         "/cancel - Stop</b>"
     )
