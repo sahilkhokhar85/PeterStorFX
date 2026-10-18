@@ -15,11 +15,11 @@ logging.getLogger("pyrogram").setLevel(logging.ERROR)
 
 from config import REPORT_CHANNEL, ON_HEROKU, PORT
 from Script import script
-from TechVJ.bot import StreamBot
-from TechVJ.server import web_server
-from TechVJ.utils.keepalive import ping_server
-from TechVJ.utils.watchdog import run_watchdog, mark_ok
-from TechVJ.utils.pending_deletes import restore_pending_deletes
+from Peter.bot import StreamBot
+from Peter.server import web_server
+from Peter.utils.keepalive import ping_server
+from Peter.utils.watchdog import run_watchdog, mark_ok
+from Peter.utils.pending_deletes import restore_pending_deletes
 
 
 loop = asyncio.get_event_loop()
@@ -46,7 +46,7 @@ async def start_bot_with_flood_wait():
 
 async def start():
     print('\n')
-    print('Initalizing Tech VJ Bot')
+    print('Initializing Peter Bot')
     mark_ok()
 
     # Start the web server FIRST so the host's health check (/) answers while
@@ -68,7 +68,7 @@ async def start():
     from plugins.broadcast import cross_bot_loop
     asyncio.create_task(cross_bot_loop(StreamBot))
     # NOTE: plugins are already loaded by Pyrogram itself (plugins={"root": "plugins"}
-    # in TechVJ/bot/__init__.py) when StreamBot.start() runs above. The old manual
+    # in Peter/bot/__init__.py) when StreamBot.start() runs above. The old manual
     # importlib loop re-executed every plugin a second time (duplicate Mongo clients).
     if ON_HEROKU:
         asyncio.create_task(ping_server())
