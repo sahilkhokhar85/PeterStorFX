@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from pyrogram import filters, Client, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from pyrogram.errors import FloodWait
+from pyrogram.errors import FloodWait, ListenerStopped
 from pyrogram.errors.exceptions.bad_request_400 import (
     ChannelInvalid,
     UsernameInvalid,
@@ -467,11 +467,25 @@ def _extract_batch_ref(msg):
 
 async def ask_batch_reference(bot, chat_id, prompt):
     # Exactly one prompt for each reference: FIRST and LAST.
-    await bot.send_message(chat_id, bold(prompt))
+    prompt_msg = await bot.send_message(
+        chat_id,
+        bold(prompt),
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="bcb_cancel"),
+        ]]),
+    )
 
     # Keep the original empty prompt: it does not add a third
     # user-facing instruction message.
-    answer = await bot.ask(chat_id, "", timeout=300)
+    try:
+        answer = await bot.ask(chat_id, "", timeout=300)
+    finally:
+        # Remove the button once this step is over, so an old button
+        # can never cancel the next step by mistake.
+        try:
+            await prompt_msg.edit_reply_markup(None)
+        except Exception:
+            pass
 
     answer_text = (answer.text or "").strip()
 
@@ -484,8 +498,7 @@ async def ask_batch_reference(bot, chat_id, prompt):
     if not ref:
         await answer.reply(
             bold(
-                "❌ Couldn't Read That. Forward It With Tag Or Send Its Link.\n"
-                "/cancel - Stop"
+                "❌ Couldn't Read That. Forward It With Tag Or Send Its Link."
             )
         )
         return None
@@ -698,6 +711,20 @@ async def copy_batch_to_log(bot, outlist, originals, status):
 # /BATCH
 # ============================================================
 
+@Client.on_callback_query(filters.regex(r"^bcb_cancel$") & filters.create(allowed))
+async def batch_cancel_button(bot, query):
+    """Cancel button under the batch prompts (same as /cancel)."""
+    try:
+        await bot.stop_listening(chat_id=query.message.chat.id)
+    except Exception:
+        traceback.print_exc()
+    await query.answer("Cancelled.")
+    try:
+        await query.message.edit_text(bold("Cancelled."))
+    except Exception:
+        pass
+
+
 @Client.on_message(
     filters.command(["batch"]) & filters.create(allowed)
 )
@@ -709,8 +736,7 @@ async def gen_link_batch(bot, message):
             bot,
             message.chat.id,
             "📦 Send The First Message Of Your Batch.\n\n"
-            "Forward It With Tag, Or Send Its Link.\n"
-            "/cancel - Stop",
+            "Forward It With Tag, Or Send Its Link.",
         )
 
         if first_ref is None:
@@ -722,8 +748,7 @@ async def gen_link_batch(bot, message):
             bot,
             message.chat.id,
             "📦 Send The Last Message Of Your Batch.\n\n"
-            "Forward It With Tag, Or Send Its Link.\n"
-            "/cancel - Stop",
+            "Forward It With Tag, Or Send Its Link.",
         )
 
         if last_ref is None:
@@ -890,6 +915,10 @@ async def gen_link_batch(bot, message):
         )
 
         await status.edit(final_text)
+
+    except ListenerStopped:
+        # Cancelled with the button; the button already said "Cancelled."
+        return
 
     except asyncio.TimeoutError:
         await message.reply(
