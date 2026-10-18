@@ -781,11 +781,11 @@ async def _watch_job(bot, sts, token):
             if final:
                 job["finished"] = time.time()
                 await _jobs().update_one({"_id": token}, {"$set": {"finished": job["finished"]}})
-            text = _all_text(job, final, True)
+            text = _all_text(job, final, False)   # bot-wise details open only when the button is tapped
             if text != last:
                 last = text
                 try:
-                    await sts.edit_text(text, reply_markup=_final_markup(token, True) if final else None)
+                    await sts.edit_text(text, reply_markup=_final_markup(token, False) if final else None)
                 except Exception:
                     pass
             if final:
