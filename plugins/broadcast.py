@@ -271,12 +271,26 @@ async def _ack(admin_id, chat_id, bot, delay):
     if not state:
         return
     units = _to_units(state["msgs"])
-    await bot.send_message(
+    old = state.get("ack_msg")
+    state["ack_msg"] = await bot.send_message(
         chat_id,
         f"<b>✅ {len(units)} Message(s) Ready.\n\n"
-        "/done - Preview\n"
-        "/cancel - Stop</b>",
+        "Send More Or Tap Done.</b>",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Done", callback_data="bcw_done"),
+            InlineKeyboardButton("❌ Cancel", callback_data="bcw_cancel"),
+        ]]),
     )
+    await _drop(old)
+
+
+async def _drop(msg):
+    """Delete a bot message (the old 'Ready' message), ignoring any error."""
+    if msg:
+        try:
+            await msg.delete()
+        except Exception:
+            pass
 
 
 # group=-2 so it runs before every other handler: while the bot is collecting
@@ -302,6 +316,7 @@ async def _capture_broadcast_message(bot, message):
         _WAITING.pop(user.id, None)
         if state["ack"]:
             state["ack"].cancel()
+        await _drop(state.get("ack_msg"))
         await message.reply_text("<b>Cancelled.</b>")
         return message.stop_propagation()
 
@@ -312,6 +327,7 @@ async def _capture_broadcast_message(bot, message):
             await message.reply_text("<b>Nothing Added Yet. Send Your Message Or /cancel.</b>")
             return message.stop_propagation()
         _WAITING.pop(user.id, None)
+        await _drop(state.get("ack_msg"))
         await _make_preview(bot, user.id, message.chat.id, _to_units(state["msgs"]), state.get("target"))
         return message.stop_propagation()
 
@@ -325,6 +341,40 @@ async def _capture_broadcast_message(bot, message):
     # a single message is acknowledged at once, an album after its last item arrived
     state["ack"] = _spawn(_ack(user.id, message.chat.id, bot, ALBUM_QUIET if message.media_group_id else 0))
     message.stop_propagation()
+
+
+@Client.on_callback_query(filters.regex(r"^bcw_(done|cancel)$") & dynamic_admin_filter("can_broadcast"))
+async def collect_buttons(bot, query):
+    """The Done / Cancel buttons under the 'Ready' message (same as /done and /cancel)."""
+    user_id = query.from_user.id
+    state = _WAITING.get(user_id)
+    if not state or time.time() - state["t"] > IDLE_SECONDS:
+        _WAITING.pop(user_id, None)
+        await query.answer("Nothing pending. Run /broadcast again.", show_alert=True)
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        return
+    if query.data == "bcw_cancel":
+        _WAITING.pop(user_id, None)
+        if state["ack"]:
+            state["ack"].cancel()
+        await query.answer("Cancelled.")
+        try:
+            await query.message.edit_text("<b>Cancelled.</b>")
+        except Exception:
+            pass
+        return
+    if not state["msgs"]:
+        return await query.answer("Nothing added yet. Send your message first.", show_alert=True)
+    _WAITING.pop(user_id, None)
+    if state["ack"]:
+        state["ack"].cancel()
+    await query.answer()
+    chat_id = query.message.chat.id
+    await _drop(query.message)
+    await _make_preview(bot, user_id, chat_id, _to_units(state["msgs"]), state.get("target"))
 
 
 @Client.on_callback_query(filters.regex(r"^bc_(yes|all|no):[0-9a-f]{8}$") & dynamic_admin_filter("can_broadcast"))
