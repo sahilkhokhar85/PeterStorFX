@@ -7,9 +7,10 @@ import time
 import os
 import sys
 import asyncio
+import secrets
 import psutil
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 from config import ADMINS
 from plugins.dbusers import db
 from plugins.admins_db import dynamic_admin_filter
@@ -79,31 +80,51 @@ async def _collect_target_ids(client, message: Message):
     return ids
 
 
+# Undo buttons: token -> {"admin": id, "ids": set, "t": created}. In memory only;
+# after a restart an old button just says it expired.
+_UNDO = {}
+_UNDO_LIFETIME = 3600
+
+
+def _undo_markup(action, ids, admin_id):
+    """One button under the result: Undo Ban / Ban Again."""
+    now = time.time()
+    for k in [k for k, v in _UNDO.items() if now - v["t"] > _UNDO_LIFETIME]:
+        _UNDO.pop(k, None)
+    token = secrets.token_hex(4)
+    _UNDO[token] = {"admin": admin_id, "ids": set(ids), "t": now, "action": action}
+    label = "🔓 Undo Ban" if action == "ban" else "🚫 Ban Again"
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=f"mod_undo:{token}")]])
+
+
 @Client.on_message(filters.command("ban") & dynamic_admin_filter())
 async def ban_user_cmd(client, message: Message):
     ids = await _collect_target_ids(client, message)
     if not ids:
         return await message.reply_text(
-            "<b>Usage:</b>\n"
-            "<code>/ban user_id</code>\n"
-            "<code>/ban id1 id2 id3 ...</code> (many ids at once)\n"
-            "Send or reply with a .txt file of ids using /ban\n"
-            "Or reply to a user's message with /ban\n\n"
-            "Ids don't need to have used the bot. They are blocked forever and get no reply."
+            "<b>🚫 Ban Users\n\n"
+            "/ban 123456789\n"
+            "/ban id1 id2 id3\n"
+            "Reply to a user with /ban\n"
+            "Reply with a .txt file of ids</b>"
         )
     from plugins.admins_db import get_all_admins
     protected = set(ADMINS) | {int(a["_id"]) for a in await get_all_admins()}
     skipped = ids & protected
     ids -= protected
+    before = set(await db.get_banned_ids())
     new = await db.ban_users(ids) if ids else 0
+    newly = ids - before
     text = (
-        f"<b>✅ Banned {new} new id(s).</b>\n"
-        f"Already banned: <code>{len(ids) - new}</code>\n"
+        "<b>🚫 Ban Done\n\n"
+        f"✅ Newly Banned: {new}\n"
+        f"♻️ Already Banned: {len(ids) - new}\n"
     )
     if skipped:
-        text += f"Skipped admins: <code>{len(skipped)}</code>\n"
-    text += f"Total banned now: <code>{await db.total_banned_count()}</code>"
-    await message.reply_text(text)
+        text += f"🛡 Skipped Admins: {len(skipped)}\n"
+    text += f"\n👥 Total Banned: {await db.total_banned_count()}</b>"
+    markup = _undo_markup("ban", newly, message.from_user.id) if newly else None
+    await message.reply_text(text, reply_markup=markup)
 
 
 @Client.on_message(filters.command("unban") & dynamic_admin_filter())
@@ -111,16 +132,48 @@ async def unban_user_cmd(client, message: Message):
     ids = await _collect_target_ids(client, message)
     if not ids:
         return await message.reply_text(
-            "<b>Usage:</b>\n"
-            "<code>/unban user_id</code>\n"
-            "<code>/unban id1 id2 id3 ...</code>\n"
-            "Or reply to a user's message / a .txt file of ids with /unban"
+            "<b>🔓 Unban Users\n\n"
+            "/unban 123456789\n"
+            "/unban id1 id2 id3\n"
+            "Reply to a user with /unban\n"
+            "Reply with a .txt file of ids</b>"
         )
+    before = set(await db.get_banned_ids())
     removed = await db.unban_users(ids)
-    await message.reply_text(
-        f"<b>✅ Unbanned {removed} id(s).</b>\n"
-        f"Not in the ban list: <code>{len(ids) - removed}</code>\n"
-        f"Total banned now: <code>{await db.total_banned_count()}</code>"
+    was = ids & before
+    text = (
+        "<b>✅ Unban Done\n\n"
+        f"🔓 Unbanned: {removed}\n"
+        f"⚠️ Not In Ban List: {len(ids) - removed}\n\n"
+        f"👥 Total Banned: {await db.total_banned_count()}</b>"
+    )
+    markup = _undo_markup("unban", was, message.from_user.id) if was else None
+    await message.reply_text(text, reply_markup=markup)
+
+
+@Client.on_callback_query(filters.regex(r"^mod_undo:[0-9a-f]{8}$") & dynamic_admin_filter())
+async def moderation_undo(client, query):
+    job = _UNDO.get(query.data.split(":", 1)[1])
+    if not job:
+        await query.answer("Expired. Use /ban or /unban again.", show_alert=True)
+        try:
+            await query.message.edit_reply_markup(None)
+        except Exception:
+            pass
+        return
+    if query.from_user.id != job["admin"]:
+        return await query.answer("Only the admin who ran this can undo it.", show_alert=True)
+    _UNDO.pop(query.data.split(":", 1)[1], None)
+    ids = job["ids"]
+    if job["action"] == "ban":
+        changed = await db.unban_users(ids)
+        head, line = "🔓 Ban Undone", f"🔓 Unbanned: {changed}"
+    else:
+        changed = await db.ban_users(ids)
+        head, line = "🚫 Ban Restored", f"🚫 Banned Again: {changed}"
+    await query.answer("Done.")
+    await query.message.edit_text(
+        f"<b>{head}\n\n{line}\n\n👥 Total Banned: {await db.total_banned_count()}</b>"
     )
 
 
@@ -129,10 +182,10 @@ async def banlist_cmd(client, message: Message):
     """Send the whole ban list as a .txt file (handy as a backup)."""
     ids = await db.get_banned_ids()
     if not ids:
-        return await message.reply_text("<b>The ban list is empty.</b>")
+        return await message.reply_text("<b>🚫 Ban List Is Empty.</b>")
     buf = io.BytesIO("\n".join(str(i) for i in ids).encode("utf-8"))
     buf.name = "banned_ids.txt"
-    await message.reply_document(buf, caption=f"<b>🚫 Banned ids: {len(ids)}</b>")
+    await message.reply_document(buf, caption=f"<b>🚫 Banned Ids: {len(ids)}</b>")
 
 
 @Client.on_message(filters.command("status") & dynamic_admin_filter())
