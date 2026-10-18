@@ -524,7 +524,7 @@ async def _stage_units(bot, units):
             try:
                 if len(unit) == 1:
                     try:
-                        from TechVJ.bot import NO_SIGN
+                        from Peter.bot import NO_SIGN
                     except ImportError:
                         NO_SIGN = ContextVar("NO_SIGN", default=False)
                     tok = NO_SIGN.set(True)  # staged copy must be exactly what the admin sent
