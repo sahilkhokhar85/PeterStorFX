@@ -27,7 +27,7 @@ from config import (
 
 from plugins.admins_db import is_admin
 from plugins.dbusers import db
-from TechVJ.utils.cover_copy import copy_keep_cover
+from Peter.utils.cover_copy import copy_keep_cover
 
 
 # ============================================================
