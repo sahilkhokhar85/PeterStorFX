@@ -419,7 +419,16 @@ async def gen_link_s(bot, message):
             bold("Reply to a message to get a shareable link.")
         )
 
-    await message.reply(await build_link_reply(replied, bot, message.from_user))
+    # Ask first. Confirm / Cancel are handled by gen_link_answer (the same
+    # buttons as for a file sent to the bot).
+    await message.reply(
+        bold("Generate A Link For This Message?"),
+        quote=True,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Confirm", callback_data=f"gl_yes:{replied.id}"),
+            InlineKeyboardButton("❌ Cancel", callback_data=f"gl_no:{replied.id}"),
+        ]]),
+    )
 
 
 # ============================================================
