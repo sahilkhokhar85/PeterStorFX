@@ -30,7 +30,8 @@ def main_menu_markup():
          InlineKeyboardButton("👥 ᴀᴅᴍɪɴꜱ", callback_data="adm_admins")],
         [InlineKeyboardButton("📊 ʙᴏᴛ ꜱᴛᴀᴛᴜꜱ", callback_data="adm_status"),
          InlineKeyboardButton("⏱ ʀᴇꜱᴛᴀʀᴛ ʙᴏᴛ", callback_data="adm_restart")],
-        [InlineKeyboardButton("✖ ᴄʟᴏꜱᴇ", callback_data="adm_close")],
+        [InlineKeyboardButton("🔗 ʟɪɴᴋꜱ", callback_data="adm_links"),
+         InlineKeyboardButton("✖ ᴄʟᴏꜱᴇ", callback_data="adm_close")],
     ])
 
 
@@ -76,6 +77,18 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
 
     elif data == "adm_close":
         await query.message.delete()
+
+    # ---------------- Links (owners only; the flow itself is in changelink.py) ----------------
+    elif data == "adm_links":
+        if user.id not in ADMINS:
+            return await query.answer("Owners only.", show_alert=True)
+        await query.message.edit_text(
+            "<b>🔗 LINKS !!</b>\n\n<b>👇 Choose An Option Below</b>",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✏️ ᴄʜᴀɴɢᴇ ʟɪɴᴋ", callback_data="lnk_change")],
+                [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
+            ]),
+        )
 
     elif data == "adm_status":
         import time, psutil, asyncio
