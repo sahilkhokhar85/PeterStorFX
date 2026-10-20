@@ -29,6 +29,7 @@ from pyrogram.errors.exceptions.bad_request_400 import ChannelInvalid
 
 from config import ADMINS, LOG_CHANNEL, WEBSITE_URL
 from Peter.utils.cover_copy import copy_keep_cover
+from Peter.utils import arolinks_edit
 from plugins.genlink import (
     links_col, PERMANENT_LINK_WORKER_URL, PERMANENT_LINK_ADMIN_KEY,
     bold, encode_start, make_file_share_link, get_message_cache_key,
@@ -377,13 +378,30 @@ async def change_confirm(bot, query):
     )
     _FLOW.pop(admin_id, None)
 
-    lines = ["✅ BOT LINK CHANGED !!", ""]
-    if short_url:
-        lines += ["Edit This In Arolinks:", "", "Short Link:"]
-        text = bold("\n".join(lines)) + f"\n<code>{html.escape(short_url)}</code>\n\n"
+    # Arolinks has no API for this, so the bot edits the short link the way the
+    # website does (see Peter/utils/arolinks_edit.py). If that is not possible
+    # the manual steps are shown instead.
+    alias = short_url.rstrip("/").rsplit("/", 1)[-1] if short_url else None
+    auto, why = False, ""
+    if alias and arolinks_edit.configured():
+        await _show(state, bold("⏳ Updating Arolinks..."))
+        auto, why = await arolinks_edit.set_destination(alias, new["share"])
+
+    if auto:
+        text = bold(
+            "✅ BOT LINK CHANGED !!\n\n"
+            "✅ Arolinks Updated Automatically\n\n"
+            "Short Link:"
+        ) + f"\n<code>{html.escape(short_url)}</code>"
     else:
-        text = bold("\n".join(lines + ["Edit The Short Link In Arolinks."])) + "\n\n"
-    text += bold("Set The New URL To:") + f"\n<code>{html.escape(new['share'])}</code>"
+        head = "✅ BOT LINK CHANGED !!\n\n"
+        if alias and arolinks_edit.configured():
+            head += f"⚠️ Arolinks Not Updated: {html.escape(why)}\n\n"
+        if short_url:
+            text = bold(head + "Edit This In Arolinks:\n\nShort Link:") + f"\n<code>{html.escape(short_url)}</code>\n\n"
+        else:
+            text = bold(head + "Edit The Short Link In Arolinks.") + "\n\n"
+        text += bold("Set The New URL To:") + f"\n<code>{html.escape(new['share'])}</code>"
 
     rows = []
     old_id = state["old"]["log_id"]
