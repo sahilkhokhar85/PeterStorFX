@@ -34,13 +34,13 @@ from plugins.genlink import (
     links_col, PERMANENT_LINK_WORKER_URL, PERMANENT_LINK_ADMIN_KEY,
     bold, encode_start, make_file_share_link, get_message_cache_key,
     get_media_unique_id, _extract_batch_ref, fetch_batch_messages,
-    copy_batch_to_log, _file_info,
+    copy_batch_to_log, _file_info, _human_size, post_links_to_log,
 )
 
 IDLE_SECONDS = 600
 
 _FLOW = {}   # owner id -> {"step", "t", "prompt", "doc", "old", "new"}
-_DONE = {}   # token -> {"admin": id, "old_log_id": int}
+_DONE = {}   # token -> {"admin": id, "old_log_id": int}  (what "Delete Old" removes)
 
 
 async def _owner(_, __, update):
@@ -77,21 +77,28 @@ def _b64(value):
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)).decode("ascii")
 
 
+def _item_label(message):
+    """'1 File (name)' for media, '1 Message (text...)' for anything else."""
+    name, _size = _file_info(message)
+    kind = "File" if getattr(message, "media", None) else "Message"
+    return f"1 {kind} ({name})" if name else f"1 {kind}"
+
+
 async def _describe_old(bot, share_link):
-    """Returns (label, old_file_log_id or None) for what the bot link gives now."""
+    """Returns (label, log_id) for what the bot link gives now. log_id is the
+    log-channel message that "Delete Old" removes: the stored message itself,
+    or Batch.json for a batch (without it the old batch link stops working)."""
     param = _start_param(share_link)
     try:
         if param and param.startswith("BATCH-"):
-            return "Batch", None
+            json_id = _b64(param[len("BATCH-"):])
+            return "Batch", int(json_id) if json_id.isdigit() else None
         if param:
             kind, _, log_id = _b64(param).partition("_")
             if kind == "file" and log_id.isdigit():
                 label = "1 File"
                 try:
-                    msg = await bot.get_messages(LOG_CHANNEL, int(log_id))
-                    name, _size = _file_info(msg)
-                    if name:
-                        label = f"1 File ({name})"
+                    label = _item_label(await bot.get_messages(LOG_CHANNEL, int(log_id)))
                 except Exception:
                     pass
                 return label, int(log_id)
@@ -136,7 +143,8 @@ async def change_pick(bot, query):
     await query.answer()
     if query.data.endswith("file"):
         state["step"] = "file"
-        await _show(state, bold("📄 Send The New File."), _cancel_markup())
+        await _show(state, bold("📄 Send The New Message.\n\nAny Type Is Allowed: File, Video, Photo, Text, Sticker..."),
+                    _cancel_markup())
     else:
         state["step"] = "batch1"
         await _show(
@@ -209,7 +217,7 @@ async def collect(bot, message):
             state,
             bold(f"✅ Link Found\n\nCurrently Gives: {html.escape(label)}\n\nWhat Is The New Content?"),
             InlineKeyboardMarkup([
-                [InlineKeyboardButton("📄 File", callback_data="lnk_pick:file"),
+                [InlineKeyboardButton("📄 Single Message", callback_data="lnk_pick:file"),
                  InlineKeyboardButton("📦 Batch", callback_data="lnk_pick:batch")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="lnk_cancel")],
             ]),
@@ -217,24 +225,35 @@ async def collect(bot, message):
         return message.stop_propagation()
 
     if step == "file":
-        if not get_media_unique_id(message):
-            await message.reply_text(bold("❌ Send A File (Document, Video Or Audio)."))
-            return message.stop_propagation()
+        state["step"] = "saving"          # an album's other items (or a double send) are ignored
         cache_key = get_message_cache_key(message)
         taken = await _link_taken(cache_key, state["doc"].get("permanent_url"))
         if taken:
+            state["step"] = "file"
             await message.reply_text(
-                bold("❌ This File Already Has Its Own Link. Send A Different File.\n\n")
+                bold("❌ This Message Already Has Its Own Link. Send A Different One.\n\n")
                 + f"<code>{html.escape(taken)}</code>"
             )
             return message.stop_propagation()
-        await _show(state, bold("⏳ Saving The File..."))
-        post = await copy_keep_cover(message, LOG_CHANNEL)
-        name, _size = _file_info(message)
+        await _show(state, bold("⏳ Saving The Message..."))
+        try:
+            post = await copy_keep_cover(message, LOG_CHANNEL)
+        except Exception as e:
+            print(f"CHANGE LINK COPY ERROR: {type(e).__name__}: {e}")
+            state["step"] = "file"
+            await _show(state, bold("❌ Could Not Save That Message. Send Another One."), _cancel_markup())
+            return message.stop_propagation()
+        name, size = _file_info(message)
+        icon = "🎬 File" if getattr(message, "media", None) else "💬 Message"
+        info = [f"<b>{icon}:</b> <code>{html.escape(name or '-')}</code>"]
+        if size:
+            info.append(f"<b>📦 Size: {_human_size(size)}</b>")
         state["new"] = {
             "share": make_file_share_link(post.id),
-            "label": f"1 File ({name})" if name else "1 File",
+            "label": _item_label(message),
             "cache_key": cache_key,
+            "post_id": post.id,
+            "info": info,
         }
         state["step"] = "preview"
         await _show(state, _preview_text(state), _confirm_markup())
@@ -314,7 +333,15 @@ async def _build_batch(bot, admin_id, state, chat_id, first_id, last_id, cache_k
             if os.path.exists(filename):
                 os.remove(filename)
         share = f"{WEBSITE_URL.rstrip('/')}?start=BATCH-{encode_start(str(post.id))}"
-        state["new"] = {"share": share, "label": f"Batch ({len(outlist)} Files)", "cache_key": cache_key}
+        source_chat = await bot.get_chat(chat_id)
+        source_title = getattr(source_chat, "title", None) or str(source_chat.id)
+        info = [
+            f"<b>📦 Batch:</b> <code>{len(outlist)}</code> <b>files</b>",
+            f"<b>📺 Source: {html.escape(source_title)} (</b><code>{source_chat.id}</code><b>), "
+            f"messages {first_id} to {last_id}</b>",
+        ]
+        state["new"] = {"share": share, "label": f"Batch ({len(outlist)} Files)", "cache_key": cache_key,
+                        "post_id": post.id, "info": info}
         state["step"] = "preview"
         await _show(state, _preview_text(state), _confirm_markup())
     except Exception as e:
@@ -378,6 +405,11 @@ async def change_confirm(bot, query):
     )
     _FLOW.pop(admin_id, None)
 
+    # Right under the new content in the log channel: its links (same post as /link and /batch make)
+    await post_links_to_log(
+        bot, new["post_id"], query.from_user, new["info"], doc["permanent_url"], new["share"],
+    )
+
     # Arolinks has no API for this, so the bot edits the short link the way the
     # website does (see Peter/utils/arolinks_edit.py). If that is not possible
     # the manual steps are shown instead.
@@ -408,9 +440,16 @@ async def change_confirm(bot, query):
     if old_id:
         token = secrets.token_hex(4)
         _DONE[token] = {"admin": admin_id, "old_log_id": old_id}
-        rows.append([InlineKeyboardButton("🗑 Delete Old File", callback_data=f"lnk_del:{token}")])
+        rows.append([InlineKeyboardButton("🗑 Delete Old", callback_data=f"lnk_del:{token}"),
+                     InlineKeyboardButton("✅ Keep Old", callback_data=f"lnk_keep:{token}")])
     rows.append([InlineKeyboardButton("❌ Close", callback_data="lnk_close")])
     await _show(state, text, InlineKeyboardMarkup(rows))
+
+
+def _drop_choice_buttons(message):
+    rows = [[b for b in row if not b.callback_data.startswith(("lnk_del:", "lnk_keep:"))]
+            for row in message.reply_markup.inline_keyboard]
+    return InlineKeyboardMarkup([r for r in rows if r])
 
 
 @Client.on_callback_query(filters.regex(r"^lnk_del:[0-9a-f]{8}$") & owner_only)
@@ -420,14 +459,21 @@ async def delete_old(bot, query):
         return await query.answer("Expired.", show_alert=True)
     try:
         await bot.delete_messages(LOG_CHANNEL, job["old_log_id"])
-        await query.answer("Old file deleted.", show_alert=True)
+        await query.answer("Old content deleted.", show_alert=True)
     except Exception as e:
         return await query.answer(f"Could not delete ({type(e).__name__}).", show_alert=True)
-    # keep the message, drop only the delete button
     try:
-        rows = [[b for b in row if not b.callback_data.startswith("lnk_del:")]
-                for row in query.message.reply_markup.inline_keyboard]
-        await query.message.edit_reply_markup(InlineKeyboardMarkup([r for r in rows if r]))
+        await query.message.edit_reply_markup(_drop_choice_buttons(query.message))
+    except Exception:
+        pass
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_keep:[0-9a-f]{8}$") & owner_only)
+async def keep_old(bot, query):
+    _DONE.pop(query.data.split(":", 1)[1], None)
+    await query.answer("Old content kept.")
+    try:
+        await query.message.edit_reply_markup(_drop_choice_buttons(query.message))
     except Exception:
         pass
 
