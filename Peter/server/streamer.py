@@ -264,9 +264,12 @@ _WATCH_PAGE = """<!DOCTYPE html>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="theme-color" content="#0a0708" />
+<meta name="color-scheme" content="dark" />
+<meta name="supported-color-schemes" content="dark" />
 <title>{file_name} | ChillFlizX</title>
 <style>
   :root {{
+    color-scheme: dark;
     --bg: #0a0708; --surface: #151012; --line: rgba(255,255,255,.07);
     --text: #eceef6; --dim: #8a90a6; --accent: #ef2f3c; --accent-2: #ff6a3d;
   }}
