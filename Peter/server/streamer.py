@@ -6,9 +6,11 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import html
 import logging
 import math
 import mimetypes
+import re
 import urllib.parse
 from typing import Any, Dict, Optional, Tuple
 
@@ -24,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 MEDIA_TYPES = ("document", "video", "audio", "photo", "animation", "voice", "video_note")
 CHUNK_SIZE = 1024 * 1024
+
+# Logo shown at the top-left of the watch page (any public image link).
+LOGO_URL = "https://files.catbox.moe/3yc512.png"
 
 
 class StreamFileNotFound(Exception):
@@ -144,6 +149,7 @@ class ByteStreamer:
         file_id.mime_type = getattr(media, "mime_type", "") or ""
         file_id.file_name = getattr(media, "file_name", "") or ""
         file_id.unique_id = getattr(media, "file_unique_id", "") or ""
+        file_id.caption = (getattr(message, "caption", None) or "").strip()
 
         self.cached_file_ids[key] = file_id
         return file_id
@@ -257,64 +263,166 @@ _WATCH_PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#0a0708" />
 <title>{file_name} | ChillFlizX</title>
 <style>
   :root {{
-    --bg: #05070d; --panel: rgba(20,24,38,.75); --border: rgba(255,255,255,.08);
-    --text: #f4f6fb; --muted: #98a2b8; --gold: #f5c453; --rose: #f43f5e;
+    --bg: #0a0708; --surface: #151012; --line: rgba(255,255,255,.07);
+    --text: #eceef6; --dim: #8a90a6; --accent: #ef2f3c; --accent-2: #ff6a3d;
   }}
-  * {{ box-sizing: border-box; }}
+  * {{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }}
+  html {{ background: var(--bg); }}
   body {{
-    margin: 0; min-height: 100vh; font-family: 'Segoe UI', Roboto, Arial, sans-serif;
-    background: radial-gradient(circle at top, #131a2c, var(--bg) 65%);
-    color: var(--text); display: flex; flex-direction: column; align-items: center;
-    padding: 24px 14px 48px;
+    margin: 0; min-height: 100vh; color: var(--text);
+    font-family: Inter, 'Segoe UI', Roboto, system-ui, Arial, sans-serif;
+    background:
+      radial-gradient(900px 500px at 8% -10%, rgba(239,47,60,.16), transparent 60%),
+      radial-gradient(800px 500px at 100% 105%, rgba(255,106,61,.10), transparent 60%),
+      var(--bg);
   }}
-  .brand {{
-    font-weight: 800; letter-spacing: .5px; margin-bottom: 18px; font-size: 1.15rem;
-    background: linear-gradient(120deg, var(--gold), var(--rose));
-    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  .wrap {{ max-width: 980px; margin: 0 auto; padding: 18px 16px 40px; }}
+
+  header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }}
+  .logo {{ display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .2px; }}
+  .mark {{
+    width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; overflow: hidden;
+    color: #fff; font-weight: 800;
   }}
-  .card {{
-    width: 100%; max-width: 780px; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 16px; overflow: hidden; backdrop-filter: blur(10px);
+  .mark img {{ width: 100%; height: 100%; object-fit: contain; display: block; }}
+  .mark.noimg {{ background: linear-gradient(135deg, var(--accent), var(--accent-2)); }}
+  .join {{
+    color: var(--text); text-decoration: none; font-size: .82rem; font-weight: 600;
+    padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255,255,255,.03);
   }}
-  video, audio {{ width: 100%; display: block; background: #000; }}
-  audio {{ padding: 28px 16px; }}
-  .info {{ padding: 18px 20px 6px; }}
-  .title {{ font-size: 1.02rem; font-weight: 600; word-break: break-word; }}
-  .meta {{ margin-top: 4px; color: var(--muted); font-size: .85rem; }}
-  .actions {{ display: flex; flex-wrap: wrap; gap: 10px; padding: 16px 20px 22px; }}
+
+  .player {{
+    position: relative; border-radius: 18px; overflow: hidden; background: #000;
+    border: 1px solid var(--line); box-shadow: 0 30px 80px -30px rgba(239,47,60,.35);
+  }}
+  .player video {{ display: block; width: 100%; max-height: 72vh; aspect-ratio: 16 / 9; background: #000; object-fit: contain; }}
+  .player.audio {{
+    background: linear-gradient(160deg, #1f1014, #0e0809); padding: 34px 22px 26px; text-align: center;
+  }}
+  .player.audio .disc {{
+    width: 96px; height: 96px; margin: 0 auto 22px; border-radius: 50%; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 14px 40px -10px rgba(239,47,60,.55);
+  }}
+  .player.audio audio {{ width: 100%; }}
+
+  .hint {{
+    display: none; margin-top: 12px; padding: 11px 14px; border-radius: 12px; font-size: .85rem;
+    color: #ffd9a0; background: rgba(255,170,60,.08); border: 1px solid rgba(255,170,60,.22);
+  }}
+  .hint.show {{ display: block; }}
+
+  .details {{ margin-top: 20px; }}
+  h1 {{ margin: 0; font-size: clamp(1.05rem, 2.4vw, 1.5rem); line-height: 1.35; font-weight: 650; word-break: break-word; }}
+  .chips {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
+  .chip {{
+    font-size: .76rem; font-weight: 600; letter-spacing: .3px; color: var(--dim);
+    padding: 6px 11px; border-radius: 999px; background: rgba(255,255,255,.04); border: 1px solid var(--line);
+  }}
+  .chip b {{ color: var(--text); font-weight: 650; }}
+
+  .actions {{ display: grid; grid-template-columns: 1.3fr 1fr; gap: 10px; margin-top: 22px; }}
   .btn {{
-    flex: 1 1 150px; text-align: center; text-decoration: none; padding: 12px 14px;
-    border-radius: 10px; font-weight: 600; font-size: .9rem; border: 1px solid var(--border);
-    color: var(--text); background: rgba(255,255,255,.04); transition: transform .15s ease;
+    display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 50px; padding: 0 16px;
+    border-radius: 13px; text-decoration: none; font-weight: 650; font-size: .94rem; cursor: pointer;
+    color: var(--text); background: var(--surface); border: 1px solid var(--line); font-family: inherit;
+    transition: transform .12s ease, border-color .15s ease;
   }}
-  .btn:active {{ transform: scale(.97); }}
-  .btn.primary {{ background: linear-gradient(120deg, var(--gold), var(--rose)); color: #10131d; border: none; }}
-  .players {{ padding: 0 20px 26px; color: var(--muted); font-size: .82rem; }}
-  .players a {{ color: var(--gold); text-decoration: none; margin-right: 12px; }}
+  .btn:hover {{ border-color: rgba(255,255,255,.18); }}
+  .btn:active {{ transform: scale(.98); }}
+  .btn.primary {{ background: linear-gradient(120deg, #e11d2e, #ff4b3a); color: #fff; border: none; }}
+  .btn svg {{ width: 18px; height: 18px; flex: none; }}
+
+  .apps {{ margin-top: 22px; padding: 16px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); }}
+  .apps h2 {{ margin: 0 0 12px; font-size: .78rem; letter-spacing: 1.2px; text-transform: uppercase; color: var(--dim); font-weight: 650; }}
+  .app-row {{ display: flex; flex-wrap: wrap; gap: 9px; }}
+  .app {{
+    display: inline-flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 10px;
+    text-decoration: none; color: var(--text); font-size: .86rem; font-weight: 600;
+    background: rgba(255,255,255,.04); border: 1px solid var(--line);
+  }}
+  .app:hover {{ border-color: var(--accent); }}
+  .app svg {{ width: 14px; height: 14px; color: var(--accent); }}
+
+  footer {{ margin-top: 30px; text-align: center; color: var(--dim); font-size: .78rem; }}
+  .toast {{
+    position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+    padding: 10px 18px; border-radius: 999px; font-size: .85rem; font-weight: 600; color: #fff; background: var(--accent);
+    transition: all .25s ease;
+  }}
+  .toast.show {{ opacity: 1; transform: translate(-50%, 0); }}
+  @media (max-width: 560px) {{ .actions {{ grid-template-columns: 1fr; }} .wrap {{ padding-top: 14px; }} }}
 </style>
 </head>
 <body>
-  <div class="brand">⚡ ChillFlizX</div>
-  <div class="card">
+<div class="wrap">
+  <header>
+    <div class="logo"><div class="mark"><img src="{logo_url}" alt="ChillFlizX" onerror="this.parentNode.classList.add('noimg');this.parentNode.textContent='C'"></div><span>ChillFlizX</span></div>
+    <a class="join" href="https://t.me/ChillFlizX" target="_blank" rel="noopener">Join Channel</a>
+  </header>
+
+  <div class="player {media_class}">
     {media_tag}
-    <div class="info">
-      <div class="title">{file_name}</div>
-      <div class="meta">{file_size}</div>
-    </div>
-    <div class="actions">
-      <a class="btn primary" href="{download_url}">🚀 Fast Download</a>
-      <a class="btn" href="{inline_url}" target="_blank" rel="noopener">🔗 Direct Stream Link</a>
-    </div>
-    <div class="players">
-      Open externally:
-      <a href="intent:{inline_url}#Intent;action=android.intent.action.VIEW;type=video/*;package=com.mxtech.videoplayer.ad;end">MX Player</a>
-      <a href="intent:{inline_url}#Intent;action=android.intent.action.VIEW;type=video/*;package=org.videolan.vlc;end">VLC</a>
-      <a href="playit://playerv2/video?url={inline_url}">PLAYit</a>
+  </div>
+  <div class="hint" id="hint">This file can't play in the browser. Use <b>Open in app</b> below or download it.</div>
+
+  <div class="details">
+    <h1>{file_name}</h1>
+    <div class="chips">
+      <span class="chip"><b>{file_size}</b></span>
+      <span class="chip"><b>{file_ext}</b></span>
+      <span class="chip">{file_kind}</span>
     </div>
   </div>
+
+  <div class="actions">
+    <a class="btn primary" href="{download_url}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 20h16"/></svg>
+      Fast Download
+    </a>
+    <button class="btn" type="button" id="copy" data-url="{inline_url}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h9"/></svg>
+      Copy Stream Link
+    </button>
+  </div>
+
+  <div class="apps">
+    <h2>Open in app</h2>
+    <div class="app-row">
+      <a class="app" href="intent:{inline_url}#Intent;action=android.intent.action.VIEW;type=video/*;package=com.mxtech.videoplayer.ad;end"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>MX Player</a>
+      <a class="app" href="intent:{inline_url}#Intent;action=android.intent.action.VIEW;type=video/*;package=org.videolan.vlc;end"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>VLC</a>
+      <a class="app" href="playit://playerv2/video?url={inline_url}"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>PLAYit</a>
+      <a class="app" href="{inline_url}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>Direct Link</a>
+    </div>
+  </div>
+
+  <footer>ChillFlizX &middot; Enjoy your stream</footer>
+</div>
+<div class="toast" id="toast">Link copied</div>
+<script>
+  (function () {{
+    var media = document.querySelector('video, audio');
+    if (media) media.addEventListener('error', function () {{ document.getElementById('hint').classList.add('show'); }});
+    var btn = document.getElementById('copy'), toast = document.getElementById('toast');
+    function done(ok) {{
+      toast.textContent = ok ? 'Link copied' : 'Could not copy';
+      toast.classList.add('show'); setTimeout(function () {{ toast.classList.remove('show'); }}, 1800);
+    }}
+    btn.addEventListener('click', function () {{
+      var url = btn.getAttribute('data-url');
+      if (navigator.clipboard && window.isSecureContext) {{
+        navigator.clipboard.writeText(url).then(function () {{ done(true); }}, function () {{ done(false); }});
+      }} else {{
+        var t = document.createElement('textarea'); t.value = url; document.body.appendChild(t); t.select();
+        var ok = false; try {{ ok = document.execCommand('copy'); }} catch (e) {{}}
+        document.body.removeChild(t); done(ok);
+      }}
+    }});
+  }})();
+</script>
 </body>
 </html>"""
 
@@ -354,11 +462,15 @@ async def stream_media(request: web.Request, chat_id: int, message_id: int, secu
             return web.Response(status=416, headers={"Content-Range": f"bytes */{file_size}"})
 
     length = end - start + 1
-    file_name = (file_id.file_name or "file").replace('"', "")
+    file_name = download_filename(getattr(file_id, "caption", ""), file_id.file_name)
+    ascii_name = file_name.encode("ascii", "ignore").decode().replace('"', "").strip() or "file"
     headers = {
         "Content-Type": file_id.mime_type or mimetypes.guess_type(file_id.file_name or "")[0] or "application/octet-stream",
         "Content-Length": str(length),
-        "Content-Disposition": ('attachment' if request.rel_url.query.get("dl") == "1" else 'inline') + f'; filename="{file_name}"',
+        "Content-Disposition": (
+            ('attachment' if request.rel_url.query.get("dl") == "1" else 'inline')
+            + f'; filename="{ascii_name}"; filename*=UTF-8\'\'{urllib.parse.quote(file_name)}'
+        ),
         "Accept-Ranges": "bytes",
         "Cache-Control": "no-cache",
         "Access-Control-Allow-Origin": "*",
@@ -394,6 +506,45 @@ async def stream_media(request: web.Request, chat_id: int, message_id: int, secu
     return response
 
 
+_CAPTION_EXTS = (
+    "mkv", "mp4", "avi", "mov", "webm", "flv", "wmv", "m4v", "ts", "mpg", "mpeg", "3gp",
+    "mp3", "m4a", "flac", "wav", "ogg", "aac", "opus", "zip", "rar", "7z", "pdf", "apk",
+)
+_CAPTION_RE = re.compile(r"^(.*?\.(?:" + "|".join(_CAPTION_EXTS) + r"))(?![A-Za-z0-9])", re.I | re.S)
+
+
+def title_from_caption(caption: str, fallback: str) -> str:
+    """Page title = the caption up to and including the file extension; whatever
+    comes after the extension is ignored. No caption -> the file name."""
+    caption = (caption or "").strip()
+    if caption:
+        m = _CAPTION_RE.match(caption)
+        if m:
+            return " ".join(m.group(1).split())
+        first_line = caption.splitlines()[0].strip()
+        if first_line:
+            return first_line
+    return (fallback or "file").replace("_", " ")
+
+
+def download_filename(caption: str, raw_name: str) -> str:
+    """File name used for the saved/streamed file: caption up to the extension,
+    cleaned so it is valid as a file name (falls back to the real file name)."""
+    raw_name = raw_name or "file"
+    title = title_from_caption(caption, raw_name)
+    title = re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", title)
+    title = " ".join(title.split()).strip(" .")
+    if not title:
+        return raw_name
+    stem, dot, ext = title.rpartition(".")
+    if not dot or len(ext) > 5 or not ext.isalnum():
+        # no extension in the title -> keep the real one
+        real_ext = raw_name.rsplit(".", 1)[-1] if "." in raw_name else ""
+        stem, ext = title, real_ext
+    stem = stem[:150].rstrip(" .")
+    return f"{stem}.{ext}" if ext else stem
+
+
 async def render_watch_page(chat_id: int, message_id: int, secure_hash: str, user_id: int) -> str:
     streamer = get_streamer()
     file_id = await streamer.get_file_properties(chat_id, message_id)
@@ -405,18 +556,30 @@ async def render_watch_page(chat_id: int, message_id: int, secure_hash: str, use
     download_url = _dl_url(token, file_id.unique_id, file_id.file_name, force_download=True)
     inline_url = _dl_url(token, file_id.unique_id, file_id.file_name, force_download=False)
     mime_type = file_id.mime_type or ""
-    file_name = (file_id.file_name or "file").replace("_", " ")
+    raw_name = file_id.file_name or "file"
+    file_name = html.escape(title_from_caption(getattr(file_id, "caption", ""), raw_name))
     file_size = humanbytes(file_id.file_size)
+    ext = raw_name.rsplit(".", 1)[-1].upper() if "." in raw_name else ""
+    is_audio = mime_type.startswith("audio")
+    safe_inline = html.escape(inline_url, quote=True)
 
-    if mime_type.startswith("audio"):
-        media_tag = f'<audio controls preload="metadata" src="{inline_url}"></audio>'
+    if is_audio:
+        media_tag = (
+            '<div class="disc"><svg width="40" height="40" viewBox="0 0 24 24" fill="#fff">'
+            '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>'
+            f'<audio controls preload="metadata" src="{safe_inline}"></audio>'
+        )
     else:
-        media_tag = f'<video controls playsinline preload="metadata" src="{inline_url}"></video>'
+        media_tag = f'<video controls playsinline preload="metadata" src="{safe_inline}"></video>'
 
     return _WATCH_PAGE.format(
         file_name=file_name,
         file_size=file_size,
+        file_ext=html.escape(ext or "FILE"),
+        file_kind="Audio" if is_audio else "Video",
+        media_class="audio" if is_audio else "",
         media_tag=media_tag,
-        download_url=download_url,
-        inline_url=inline_url,
+        download_url=html.escape(download_url, quote=True),
+        inline_url=safe_inline,
+        logo_url=html.escape(LOGO_URL, quote=True),
     )
