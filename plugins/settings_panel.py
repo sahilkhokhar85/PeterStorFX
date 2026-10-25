@@ -85,7 +85,8 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
         await query.message.edit_text(
             "<b>🔗 LINKS !!</b>\n\n<b>👇 Choose An Option Below</b>",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✏️ ᴄʜᴀɴɢᴇ ʟɪɴᴋ", callback_data="lnk_change")],
+                [InlineKeyboardButton("✏️ ᴄʜᴀɴɢᴇ ʟɪɴᴋ", callback_data="lnk_change"),
+                 InlineKeyboardButton("🗑 ᴅᴇʟᴇᴛᴇ ʟɪɴᴋ", callback_data="lnk_delete")],
                 [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
             ]),
         )
