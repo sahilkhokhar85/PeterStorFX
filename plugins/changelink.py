@@ -8,6 +8,8 @@
 # Flow (all buttons, no commands):
 #   Links -> Change Link -> send the domain link -> File / Batch -> send the new
 #   content -> preview -> Confirm.
+# Delete Link (Links -> Delete Link): removes a link completely (Worker record, saved
+# content in the log channel, database record) after a confirm.
 # Confirm updates the Worker record (the shortener is kept) and the saved link in
 # the database, then shows the shortener link and the new bot link so the
 # destination can be edited in the Arolinks dashboard (Arolinks has no API for it).
@@ -40,7 +42,7 @@ from plugins.genlink import (
 IDLE_SECONDS = 600
 
 _FLOW = {}   # owner id -> {"step", "t", "prompt", "doc", "old", "new"}
-_DONE = {}   # token -> {"admin": id, "old_log_id": int}  (what "Delete Old" removes)
+_DONE = {}   # token -> {"admin", "old_log_id", "label", "text"}  (what "Delete Old" removes)
 
 
 async def _owner(_, __, update):
@@ -133,6 +135,20 @@ async def change_cancel(bot, query):
         pass
 
 
+@Client.on_callback_query(filters.regex(r"^lnk_delete$") & owner_only)
+async def delete_start(bot, query):
+    state = _FLOW[query.from_user.id] = {
+        "step": "link", "t": time.time(), "prompt": query.message,
+        "doc": None, "old": None, "new": None, "mode": "delete",
+    }
+    await query.answer()
+    await _show(
+        state,
+        bold("🗑 Delete Link\n\nSend The Domain Link You Want To Delete."),
+        _cancel_markup(),
+    )
+
+
 @Client.on_callback_query(filters.regex(r"^lnk_pick:(file|batch)$") & owner_only)
 async def change_pick(bot, query):
     state = _FLOW.get(query.from_user.id)
@@ -143,7 +159,7 @@ async def change_pick(bot, query):
     await query.answer()
     if query.data.endswith("file"):
         state["step"] = "file"
-        await _show(state, bold("📄 Send The New Message.\n\nAny Type Is Allowed: File, Video, Photo, Text, Sticker..."),
+        await _show(state, bold("📄 Send The New Message."),
                     _cancel_markup())
     else:
         state["step"] = "batch1"
@@ -211,6 +227,10 @@ async def collect(bot, message):
             await message.reply_text(bold("❌ This Link Is Not In The Database."))
             return message.stop_propagation()
         label, old_id = await _describe_old(bot, doc.get("share_link"))
+        if state.get("mode") == "delete":
+            state.update(step="dconfirm", doc=doc, key=key, old={"label": label, "log_id": old_id})
+            await _show(state, _delete_text(state), _delete_markup())
+            return message.stop_propagation()
         state.update(step="choose", doc=doc, key=key,
                      old={"label": label, "log_id": old_id})
         await _show(
@@ -350,6 +370,86 @@ async def _build_batch(bot, admin_id, state, chat_id, first_id, last_id, cache_k
         await _show(state, bold("❌ Could Not Save The Batch. Send The First Message Again."), _cancel_markup())
 
 
+# ---------------- delete link ----------------
+
+def _delete_text(state):
+    label = state["old"]["label"]
+    lines = [
+        "🗑 DELETE THIS LINK?\n\nContent: " + html.escape(label) + "\n\nThis Will Remove:",
+        "• The Domain Link (It Stops Working)",
+    ]
+    if state["old"]["log_id"]:
+        lines.append("• The Saved Batch List In The Log Channel (The Files Stay)"
+                     if label.startswith("Batch") else "• The Saved Content In The Log Channel")
+    lines += ["• The Link Record In The Database", "", "The Arolinks Short Link Is Not Touched."]
+    return (bold("\n".join(lines))
+            + "\n\n" + bold("Link:") + f"\n<code>{html.escape(state['doc'].get('permanent_url') or '')}</code>")
+
+
+def _delete_markup():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Confirm Delete", callback_data="lnk_delyes"),
+        InlineKeyboardButton("❌ Cancel", callback_data="lnk_cancel"),
+    ]])
+
+
+async def _worker_delete(key):
+    """Returns an error text, or None when the Worker removed the domain link."""
+    if not PERMANENT_LINK_WORKER_URL or not PERMANENT_LINK_ADMIN_KEY:
+        return "Worker URL or admin key is missing."
+    url = f"{PERMANENT_LINK_WORKER_URL.rstrip('/')}/admin/delete"
+    headers = {"Content-Type": "application/json", "X-Admin-Key": PERMANENT_LINK_ADMIN_KEY}
+    try:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json={"key": key}, headers=headers) as r:
+                if r.status != 200:
+                    return f"Worker replied HTTP {r.status}."
+                data = json.loads(await r.text())
+                return None if data.get("success") else str(data.get("error") or "Worker refused.")
+    except Exception as e:
+        return f"{type(e).__name__}"
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_delyes$") & owner_only)
+async def delete_confirm(bot, query):
+    admin_id = query.from_user.id
+    state = _FLOW.get(admin_id)
+    if not _fresh(state) or state["step"] != "dconfirm":
+        _FLOW.pop(admin_id, None)
+        return await query.answer("Expired. Open Delete Link again.", show_alert=True)
+    state["step"] = "deleting"        # a second tap finds nothing to do
+    await query.answer("Deleting...")
+    await _show(state, bold("⏳ Deleting The Link..."))
+
+    error = await _worker_delete(state["key"])
+    if error:
+        state["step"] = "dconfirm"
+        return await _show(
+            state,
+            bold(f"❌ Could Not Delete The Link.\n{html.escape(error)}\n\nNothing Was Deleted."),
+            _delete_markup(),
+        )
+
+    await links_col.delete_one({"_id": state["doc"]["_id"]})
+    content = "—"
+    old_id = state["old"]["log_id"]
+    if old_id:
+        try:
+            await bot.delete_messages(LOG_CHANNEL, old_id)
+            content = "Removed"
+        except Exception as e:
+            print(f"DELETE LINK LOG ERROR: {type(e).__name__}: {e}")
+            content = "Could Not Be Removed"
+    _FLOW.pop(admin_id, None)
+    await _show(
+        state,
+        bold("✅ LINK DELETED !!\n\n🌐 Domain Link: Removed\n🗄 Database: Removed\n"
+             f"📦 Log Channel Content: {content}"),
+        InlineKeyboardMarkup([[InlineKeyboardButton("❌ Close", callback_data="lnk_close")]]),
+    )
+
+
 # ---------------- confirm ----------------
 
 async def _worker_update(key, destination):
@@ -435,47 +535,112 @@ async def change_confirm(bot, query):
             text = bold(head + "Edit The Short Link In Arolinks.") + "\n\n"
         text += bold("Set The New URL To:") + f"\n<code>{html.escape(new['share'])}</code>"
 
-    rows = []
     old_id = state["old"]["log_id"]
     if old_id:
         token = secrets.token_hex(4)
-        _DONE[token] = {"admin": admin_id, "old_log_id": old_id}
-        rows.append([InlineKeyboardButton("🗑 Delete Old", callback_data=f"lnk_del:{token}"),
-                     InlineKeyboardButton("✅ Keep Old", callback_data=f"lnk_keep:{token}")])
-    rows.append([InlineKeyboardButton("❌ Close", callback_data="lnk_close")])
-    await _show(state, text, InlineKeyboardMarkup(rows))
+        _DONE[token] = {"admin": admin_id, "old_log_id": old_id,
+                        "label": state["old"]["label"], "text": text}
+        await _show(state, text, _choice_markup(token))
+    else:
+        await _show(state, text, _close_markup())
 
 
-def _drop_choice_buttons(message):
-    rows = [[b for b in row if not b.callback_data.startswith(("lnk_del:", "lnk_keep:"))]
-            for row in message.reply_markup.inline_keyboard]
-    return InlineKeyboardMarkup([r for r in rows if r])
+def _close_markup():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Close", callback_data="lnk_close")]])
 
 
-@Client.on_callback_query(filters.regex(r"^lnk_del:[0-9a-f]{8}$") & owner_only)
-async def delete_old(bot, query):
-    job = _DONE.pop(query.data.split(":", 1)[1], None)
-    if not job or job["admin"] != query.from_user.id:
-        return await query.answer("Expired.", show_alert=True)
+def _choice_markup(token):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗑 Delete Old", callback_data=f"lnk_del:{token}"),
+         InlineKeyboardButton("✅ Keep Old", callback_data=f"lnk_keep:{token}")],
+        [InlineKeyboardButton("❌ Close", callback_data="lnk_close")],
+    ])
+
+
+def _job(query):
+    job = _DONE.get(query.data.split(":", 1)[1])
+    return job if job and job["admin"] == query.from_user.id else None
+
+
+async def _edit(query, text, markup):
     try:
-        await bot.delete_messages(LOG_CHANNEL, job["old_log_id"])
-        await query.answer("Old content deleted.", show_alert=True)
-    except Exception as e:
-        return await query.answer(f"Could not delete ({type(e).__name__}).", show_alert=True)
-    try:
-        await query.message.edit_reply_markup(_drop_choice_buttons(query.message))
+        await query.message.edit_text(text, reply_markup=markup)
     except Exception:
         pass
+
+
+# "Delete Old" / "Keep Old" first ask again, so a wrong tap changes nothing.
+
+@Client.on_callback_query(filters.regex(r"^lnk_del:[0-9a-f]{8}$") & owner_only)
+async def delete_old_ask(bot, query):
+    job = _job(query)
+    if not job:
+        return await query.answer("Expired.", show_alert=True)
+    token = query.data.split(":", 1)[1]
+    if job["label"].startswith("Batch"):
+        what = ("The Old Batch List Will Be Removed, So The Old Bot Link Stops Working. "
+                "The Files Stay In The Log Channel.")
+    else:
+        what = "It Will Be Removed From The Log Channel And The Old Bot Link Will Stop Working."
+    await query.answer()
+    await _edit(
+        query,
+        job["text"] + "\n\n" + bold(f"⚠️ DELETE OLD CONTENT?\n\nOld: {html.escape(job['label'])}\n{what}"),
+        InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Delete", callback_data=f"lnk_dely:{token}"),
+                               InlineKeyboardButton("↩️ Back", callback_data=f"lnk_back:{token}")]]),
+    )
 
 
 @Client.on_callback_query(filters.regex(r"^lnk_keep:[0-9a-f]{8}$") & owner_only)
+async def keep_old_ask(bot, query):
+    job = _job(query)
+    if not job:
+        return await query.answer("Expired.", show_alert=True)
+    token = query.data.split(":", 1)[1]
+    await query.answer()
+    await _edit(
+        query,
+        job["text"] + "\n\n" + bold(
+            f"KEEP OLD CONTENT?\n\nOld: {html.escape(job['label'])}\n"
+            "It Stays In The Log Channel And The Old Bot Link Keeps Working."),
+        InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Keep", callback_data=f"lnk_keepy:{token}"),
+                               InlineKeyboardButton("↩️ Back", callback_data=f"lnk_back:{token}")]]),
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_back:[0-9a-f]{8}$") & owner_only)
+async def choice_back(bot, query):
+    job = _job(query)
+    if not job:
+        return await query.answer("Expired.", show_alert=True)
+    await query.answer()
+    await _edit(query, job["text"], _choice_markup(query.data.split(":", 1)[1]))
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_dely:[0-9a-f]{8}$") & owner_only)
+async def delete_old(bot, query):
+    job = _job(query)
+    if not job:
+        return await query.answer("Expired.", show_alert=True)
+    token = query.data.split(":", 1)[1]
+    try:
+        await bot.delete_messages(LOG_CHANNEL, job["old_log_id"])
+    except Exception as e:
+        await query.answer(f"Could not delete ({type(e).__name__}).", show_alert=True)
+        return await _edit(query, job["text"], _choice_markup(token))
+    _DONE.pop(token, None)
+    await query.answer("Old content deleted.", show_alert=True)
+    await _edit(query, job["text"] + "\n\n" + bold("🗑 Old Content Deleted."), _close_markup())
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_keepy:[0-9a-f]{8}$") & owner_only)
 async def keep_old(bot, query):
+    job = _job(query)
+    if not job:
+        return await query.answer("Expired.", show_alert=True)
     _DONE.pop(query.data.split(":", 1)[1], None)
     await query.answer("Old content kept.")
-    try:
-        await query.message.edit_reply_markup(_drop_choice_buttons(query.message))
-    except Exception:
-        pass
+    await _edit(query, job["text"] + "\n\n" + bold("✅ Old Content Kept."), _close_markup())
 
 
 @Client.on_callback_query(filters.regex(r"^lnk_close$") & owner_only)
