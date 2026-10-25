@@ -112,6 +112,27 @@ async def _describe_old(bot, share_link):
     return "Unknown", None
 
 
+LINKS_HEADER = "🔗 Links For The Message Above"
+
+
+async def _delete_saved(bot, content_id):
+    """Removes a saved message (or Batch.json) from the log channel together with the
+    "Links For The Message Above" post that sits right under it (the post that replies
+    to it). Returns how many messages were removed."""
+    ids = [content_id]
+    try:
+        near = await bot.get_messages(LOG_CHANNEL, [content_id + 1, content_id + 2, content_id + 3])
+        for m in near or []:
+            if (m and not getattr(m, "empty", False)
+                    and (getattr(m, "text", None) or "").startswith(LINKS_HEADER)
+                    and getattr(m, "reply_to_message_id", None) == content_id):
+                ids.append(m.id)
+    except Exception as e:
+        print(f"LINKS POST LOOKUP ERROR: {type(e).__name__}: {e}")
+    await bot.delete_messages(LOG_CHANNEL, ids)
+    return len(ids)
+
+
 # ---------------- opening the flow ----------------
 
 @Client.on_callback_query(filters.regex(r"^lnk_change$") & owner_only)
@@ -411,6 +432,7 @@ def _delete_text(state):
         "This Will Remove:",
         "• The Saved Batch List In The Log Channel (The Files Stay)" if label.startswith("Batch")
         else "• The Saved Content In The Log Channel",
+        "• Its Links Post Right Under It",
         "• So This Bot Link Stops Working", "",
         "Domain Links And Short Links Are Not Touched.",
         "Make Sure No Short Link Still Uses This Bot Link.",
@@ -441,8 +463,10 @@ async def delete_confirm(bot, query):
         return await _show(state, bold("❌ This Bot Link Is In Use Now. Nothing Was Deleted."), _close_markup())
     await _show(state, bold("⏳ Deleting The Bot Link..."))
     try:
-        await bot.delete_messages(LOG_CHANNEL, state["old"]["log_id"])
-        result = bold("✅ BOT LINK DELETED !!\n\n📦 Log Channel Content: Removed\n🔗 Bot Link: Stopped")
+        removed = await _delete_saved(bot, state["old"]["log_id"])
+        result = bold("✅ BOT LINK DELETED !!\n\n📦 Log Channel Content: Removed\n"
+                      + ("📎 Links Post: Removed\n" if removed > 1 else "")
+                      + "🔗 Bot Link: Stopped")
     except Exception as e:
         print(f"DELETE LINK LOG ERROR: {type(e).__name__}: {e}")
         result = bold("❌ Could Not Delete The Saved Content.\nNothing Was Changed.")
@@ -578,10 +602,11 @@ async def delete_old_ask(bot, query):
         return await query.answer("Expired.", show_alert=True)
     token = query.data.split(":", 1)[1]
     if job["label"].startswith("Batch"):
-        what = ("The Old Batch List Will Be Removed, So The Old Bot Link Stops Working. "
+        what = ("The Old Batch List And Its Links Post Will Be Removed, So The Old Bot Link Stops Working. "
                 "The Files Stay In The Log Channel.")
     else:
-        what = "It Will Be Removed From The Log Channel And The Old Bot Link Will Stop Working."
+        what = ("It And Its Links Post Will Be Removed From The Log Channel, "
+                "And The Old Bot Link Will Stop Working.")
     await query.answer()
     await _edit(
         query,
@@ -624,7 +649,7 @@ async def delete_old(bot, query):
         return await query.answer("Expired.", show_alert=True)
     token = query.data.split(":", 1)[1]
     try:
-        await bot.delete_messages(LOG_CHANNEL, job["old_log_id"])
+        await _delete_saved(bot, job["old_log_id"])
     except Exception as e:
         await query.answer(f"Could not delete ({type(e).__name__}).", show_alert=True)
         return await _edit(query, job["text"], _choice_markup(token))
