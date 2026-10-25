@@ -172,7 +172,7 @@ async def delete_start(bot, query):
     }
 
 
-@Client.on_callback_query(filters.regex(r"^lnk_pick:(file|batch)$") & owner_only)
+@Client.on_callback_query(filters.regex(r"^lnk_pick:(file|batch|existing)$") & owner_only)
 async def change_pick(bot, query):
     state = _FLOW.get(query.from_user.id)
     if not _fresh(state) or state["step"] != "choose":
@@ -180,7 +180,10 @@ async def change_pick(bot, query):
         return await query.answer("Expired. Open Change Link again.", show_alert=True)
     state["t"] = time.time()
     await query.answer()
-    if query.data.endswith("file"):
+    if query.data.endswith("existing"):
+        state["step"] = "existing"
+        await _show(state, bold("🔗 Send The Existing Bot Link."), _cancel_markup())
+    elif query.data.endswith("file"):
         state["step"] = "file"
         await _show(state, bold("📄 Send The New Message."),
                     _cancel_markup())
@@ -308,9 +311,48 @@ async def collect(bot, message):
             InlineKeyboardMarkup([
                 [InlineKeyboardButton("📄 Single Message", callback_data="lnk_pick:file"),
                  InlineKeyboardButton("📦 Batch", callback_data="lnk_pick:batch")],
+                [InlineKeyboardButton("🔗 Existing Bot Link", callback_data="lnk_pick:existing")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="lnk_cancel")],
             ]),
         )
+        return message.stop_propagation()
+
+    if step == "existing":
+        param = _start_param(text)
+        if not param:
+            await message.reply_text(bold("❌ Send A Valid Bot Link."))
+            return message.stop_propagation()
+        current = _start_param(state["doc"].get("share_link"))
+        if param == current:
+            await message.reply_text(bold("❌ This Bot Link Is Already Active On This Domain Link."))
+            return message.stop_propagation()
+        user_doc = await _link_in_use(param)
+        if user_doc:
+            await message.reply_text(
+                bold("❌ This Bot Link Is Already Used By:\n\n")
+                + f"<code>{html.escape(user_doc.get('permanent_url') or '-')}</code>"
+            )
+            return message.stop_propagation()
+        label, log_id = await _describe_old(bot, text)
+        gone = True
+        if log_id:
+            try:
+                saved = await bot.get_messages(LOG_CHANNEL, log_id)
+                gone = (not saved) or bool(getattr(saved, "empty", False))
+            except Exception:
+                gone = True
+        if not log_id or gone:
+            await message.reply_text(bold("❌ Nothing Is Saved For This Bot Link (Deleted Or Not Valid)."))
+            return message.stop_propagation()
+        state["new"] = {
+            "share": f"{WEBSITE_URL.rstrip('/')}?start={param}",
+            "label": label,
+            "cache_key": f"existing:{param}",
+            "post_id": log_id,
+            "info": [f"<b>🔗 Existing Bot Link:</b> <code>{html.escape(label)}</code>"],
+        }
+        state["step"] = "preview"
+        await _show(state, _preview_text(state), _confirm_markup())
         return message.stop_propagation()
 
     if step == "file":
