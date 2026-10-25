@@ -120,11 +120,15 @@ def _kind_of(msg):
 
 
 def _kinds_summary(kinds):
-    """['Message','Message','Video'] -> '2 Messages · 1 Video' (order of first appearance)."""
+    """Order of first appearance. Up to 2 types: one line ('3 Messages · 2 Stickers').
+    More than 2 types: a small tree, one type per line (starting on a new line)."""
     counts = {}
     for k in kinds:
         counts[k] = counts.get(k, 0) + 1
-    return " · ".join(f"{n} {k}{'' if n == 1 else 's'}" for k, n in counts.items())
+    rows = [f"{n} {k}{'' if n == 1 else 's'}" for k, n in counts.items()]
+    if len(rows) <= 2:
+        return " · ".join(rows)
+    return "\n" + "\n".join(("└ " if i == len(rows) - 1 else "├ ") + r for i, r in enumerate(rows))
 
 
 def _has_buttons(markup):
