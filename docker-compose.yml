@@ -1,0 +1,15 @@
+x-bot: &bot
+  build: .
+  image: peterstorfx
+  restart: always
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
+
+services:
+  bot1: {<<: *bot, env_file: envs/bot1.env, environment: [PORT=8081], ports: ["127.0.0.1:8081:8081"]}
+  bot2: {<<: *bot, env_file: envs/bot2.env, environment: [PORT=8082], ports: ["127.0.0.1:8082:8082"]}
+  bot3: {<<: *bot, env_file: envs/bot3.env, environment: [PORT=8083], ports: ["127.0.0.1:8083:8083"]}
+  bot4: {<<: *bot, env_file: envs/bot4.env, environment: [PORT=8084], ports: ["127.0.0.1:8084:8084"]}
+  bot5: {<<: *bot, env_file: envs/bot5.env, environment: [PORT=8085], ports: ["127.0.0.1:8085:8085"]}
+  bot6: {<<: *bot, env_file: envs/bot6.env, environment: [PORT=8086], ports: ["127.0.0.1:8086:8086"]}
