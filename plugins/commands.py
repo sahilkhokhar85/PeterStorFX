@@ -390,7 +390,7 @@ async def start(client, message):
                 except Exception:
                     continue
 
-                await asyncio.sleep(0.6)
+                await asyncio.sleep(0.3)
                 continue
 
             rep_caption = None   # caption of the report copy (None = keep the original)
@@ -491,7 +491,7 @@ async def start(client, message):
             filesarr.append(msg)
             titles.append(title)
             report_items.append((info, rep_caption, reply_markup))
-            await asyncio.sleep(0.6)
+            await asyncio.sleep(0.3)
         try:
             if titles:
                 shown = titles[:30]
