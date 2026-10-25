@@ -12,6 +12,11 @@ from plugins.force_sub import not_joined_channels, force_sub_join_buttons, get_m
 from Peter.server.streamer import build_stream_urls
 from Peter.utils.cover_copy import copy_keep_cover as _copy_media
 from Peter.utils.pending_deletes import run_delete
+try:
+    from Peter.bot import NO_SIGN
+except ImportError:
+    from contextvars import ContextVar
+    NO_SIGN = ContextVar("NO_SIGN", default=False)
 from config import *
 import re
 import json
@@ -101,6 +106,27 @@ _REPORT_QUEUE = None
 _REPORT_WORKER = None
 
 
+def _kind_of(msg):
+    """Plain type name of a stored message, for the batch report."""
+    if getattr(msg, "sticker", None):
+        return "Sticker"
+    media = getattr(msg, "media", None)
+    if media:
+        return {
+            "photo": "Photo", "video": "Video", "document": "File", "audio": "Audio",
+            "voice": "Voice", "animation": "GIF", "video_note": "Video Note",
+        }.get(getattr(media, "value", str(media)), "File")
+    return "Message"
+
+
+def _kinds_summary(kinds):
+    """['Message','Message','Video'] -> '2 Messages · 1 Video' (order of first appearance)."""
+    counts = {}
+    for k in kinds:
+        counts[k] = counts.get(k, 0) + 1
+    return " · ".join(f"{n} {k}{'' if n == 1 else 's'}" for k, n in counts.items())
+
+
 def _has_buttons(markup):
     return bool(markup and getattr(markup, "inline_keyboard", None))
 
@@ -141,7 +167,13 @@ async def _report_worker():
                             kw["caption"] = caption
                         if markup is not None:
                             kw["reply_markup"] = markup
-                        await _copy_media(src, REPORT_CHANNEL, **kw)
+                        # The report text already says which bot it is; a copied text message
+                        # must stay exactly as stored (no "Bot:" line added to the content).
+                        tok = NO_SIGN.set(True)
+                        try:
+                            await _copy_media(src, REPORT_CHANNEL, **kw)
+                        finally:
+                            NO_SIGN.reset(tok)
                     break
                 except FloodWait as e:
                     await asyncio.sleep(int(e.value) + 1)
@@ -493,20 +525,13 @@ async def start(client, message):
             report_items.append((info, rep_caption, reply_markup))
             await asyncio.sleep(0.3)
         try:
-            if titles:
-                shown = titles[:30]
-                files_list = "\n".join(f"<b>{i+1}.</b> <code>{t}</code>" for i, t in enumerate(shown))
-                if len(titles) > 30:
-                    files_list += f"\n<b>... and {len(titles) - 30} more</b>"
-            else:
-                files_list = "N/A"
+            accessed = _kinds_summary([_kind_of(it[0]) for it in report_items]) or "N/A"
             queue_report(
                 client,
                 f"<b>📥 #FileAccess (Batch)</b>\n\n"
                 f"<b>👤 User: {message.from_user.mention} (</b><code>{message.from_user.id}</code><b>)</b>\n\n"
-                f"<b>📦 Files Accessed:</b> <code>{len(filesarr)}</code>\n\n"
-                f"{files_list}\n\n"
-                f"<b>⬇️ ᴀᴄᴛᴜᴀʟ ꜰɪʟᴇꜱ ʙᴇʟᴏᴡ</b>",
+                f"<b>📦 Accessed: {accessed}</b>\n\n"
+                f"<b>⬇️ Actual Messages Below</b>",
                 report_items,
             )
         except:
