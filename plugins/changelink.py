@@ -38,6 +38,7 @@ from plugins.genlink import (
     bold, encode_start, make_file_share_link, get_message_cache_key,
     get_media_unique_id, _extract_batch_ref, fetch_batch_messages,
     copy_batch_to_log, _file_info, _human_size, post_links_to_log,
+    method_markup, start_manual,
 )
 
 IDLE_SECONDS = 600
@@ -184,13 +185,35 @@ async def change_pick(bot, query):
         await _show(state, bold("📄 Send The New Message."),
                     _cancel_markup())
     else:
+        state["step"] = "method"
+        await _show(state, bold("📦 Choose How To Make The New Batch"),
+                    method_markup("lnk_bm:manual", "lnk_bm:range", "lnk_cancel"))
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_bm:(manual|range)$") & owner_only)
+async def change_method(bot, query):
+    state = _FLOW.get(query.from_user.id)
+    if not _fresh(state) or state["step"] != "method":
+        _FLOW.pop(query.from_user.id, None)
+        return await query.answer("Expired. Open Change Link again.", show_alert=True)
+    state["t"] = time.time()
+    await query.answer()
+    if query.data.endswith("range"):
         state["step"] = "batch1"
-        await _show(
+        return await _show(
             state,
             bold("📦 Send The First Message Of The New Batch.\n\n"
                  "Forward It With Tag, Or Send Its Link."),
             _cancel_markup(),
         )
+    state["step"] = "manual"
+    uid = query.from_user.id
+
+    async def finish(b, admin_id, mstate, outlist, failed):
+        await _finish_manual(b, admin_id, state, outlist, failed)
+
+    await start_manual(query.from_user, state["prompt"], finish,
+                       on_cancel=lambda: _FLOW.pop(uid, None))
 
 
 # ---------------- collecting the messages ----------------
@@ -414,6 +437,33 @@ async def _build_batch(bot, admin_id, state, chat_id, first_id, last_id, cache_k
         print(f"CHANGE LINK BATCH ERROR: {type(e).__name__}: {e}")
         state["step"] = "batch1"
         await _show(state, bold("❌ Could Not Save The Batch. Send The First Message Again."), _cancel_markup())
+
+
+async def _finish_manual(bot, admin_id, state, outlist, failed):
+    """Batch made by sending messages one by one: same Batch.json as /batch, but NO domain link
+    and NO shortener link. Shows the preview like the range method."""
+    filename = f"changelink_{admin_id}.json"
+    try:
+        with open(filename, "w", encoding="utf-8") as out:
+            json.dump(outlist, out)
+        post = await bot.send_document(
+            LOG_CHANNEL, filename, file_name="Batch.json",
+            caption=bold("⚠️ Batch Generated For Filestore."),
+        )
+    finally:
+        if os.path.exists(filename):
+            os.remove(filename)
+    share = f"{WEBSITE_URL.rstrip('/')}?start=BATCH-{encode_start(str(post.id))}"
+    info = [
+        f"<b>📦 Batch:</b> <code>{len(outlist)}</code> <b>messages</b>",
+        "<b>📺 Source: Sent One By One</b>",
+    ]
+    label = f"Batch ({len(outlist)} Files" + (f", {failed} Skipped" if failed else "") + ")"
+    state["new"] = {"share": share, "label": label, "cache_key": f"batch:manual:{post.id}",
+                    "post_id": post.id, "info": info}
+    state["step"] = "preview"
+    state["t"] = time.time()
+    await _show(state, _preview_text(state), _confirm_markup())
 
 
 # ---------------- delete link ----------------
