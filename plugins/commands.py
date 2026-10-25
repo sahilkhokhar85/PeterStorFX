@@ -466,22 +466,26 @@ async def start(client, message):
                         for b in row
                     ])
 
-                reply_markup = InlineKeyboardMarkup(button)
+                # An EMPTY button list must not be sent (Telegram rejects it, so plain text
+                # messages in a batch were silently skipped).
+                reply_markup = InlineKeyboardMarkup(button) if button else None
+                extra = {"reply_markup": reply_markup} if reply_markup else {}
 
                 try:
                     msg = await info.copy(
                         chat_id=message.from_user.id,
                         protect_content=protect,
-                        reply_markup=reply_markup
+                        **extra
                     )
                 except FloodWait as e:
                     await asyncio.sleep(e.value)
                     msg = await info.copy(
                         chat_id=message.from_user.id,
                         protect_content=protect,
-                        reply_markup=reply_markup
+                        **extra
                     )
-                except Exception:
+                except Exception as e:
+                    logger.error(f"Batch message {channel_id}/{msgid} could not be delivered: {type(e).__name__}: {e}")
                     continue
 
             filesarr.append(msg)
