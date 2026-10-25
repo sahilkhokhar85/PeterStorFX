@@ -6,6 +6,7 @@ import base64
 import aiohttp
 import asyncio
 import html
+import time
 import traceback
 from datetime import datetime, timezone
 
@@ -723,6 +724,7 @@ async def copy_batch_to_log(bot, outlist, originals, status):
 @Client.on_callback_query(filters.regex(r"^bcb_cancel$") & filters.create(allowed))
 async def batch_cancel_button(bot, query):
     """Cancel button under the batch prompts (same as /cancel)."""
+    _MANUAL.pop(query.from_user.id, None)
     try:
         await bot.stop_listening(chat_id=query.message.chat.id)
     except Exception:
@@ -734,10 +736,225 @@ async def batch_cancel_button(bot, query):
         pass
 
 
+# ---------------- method choice ----------------
+# /batch first asks HOW the batch is made:
+#   1) Send Messages One By One  - anything (files, text, photos...) sent or forwarded to the
+#      bot, then Done. Each one is copied to the log channel in the order it was sent.
+#   2) First & Last Message      - the old way (first + last message / link of a channel range).
+# Change Link -> Batch asks the same question and uses the same collector.
+
+MANUAL_IDLE = 600
+_MANUAL = {}   # admin id -> {"items": {msg_id: message}, "panel", "t", "busy", "user", "finish", "on_cancel"}
+
+
+def method_markup(manual_cb, range_cb, cancel_cb):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📤 Send Messages One By One", callback_data=manual_cb)],
+        [InlineKeyboardButton("🔗 First & Last Message", callback_data=range_cb)],
+        [InlineKeyboardButton("❌ Cancel", callback_data=cancel_cb)],
+    ])
+
+
+def _manual_markup():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Done", callback_data="bm_done"),
+        InlineKeyboardButton("❌ Cancel", callback_data="bm_cancel"),
+    ]])
+
+
+def _manual_text(count):
+    return bold(
+        "📤 Send Or Forward The Messages One By One.\n"
+        "Press Done When Finished.\n\n"
+        f"📥 Received: {count}"
+    )
+
+
+async def start_manual(user, panel, finish, on_cancel=None):
+    """Open the one-by-one collector. `panel` is the bot message that shows the counter;
+    `finish(bot, admin_id, state, outlist, failed)` is called after Done."""
+    _MANUAL[user.id] = {
+        "items": {}, "panel": panel, "t": time.time(), "busy": False, "user": user,
+        "finish": finish, "on_cancel": on_cancel, "shown": 0, "task": None,
+    }
+    try:
+        await panel.edit_text(_manual_text(0), reply_markup=_manual_markup())
+    except Exception:
+        pass
+
+
+async def _refresh_panel(state):
+    await asyncio.sleep(1)           # one edit per second at most while files keep coming
+    state["task"] = None
+    count = len(state["items"])
+    if state["busy"] or count == state["shown"]:
+        return
+    state["shown"] = count
+    try:
+        await state["panel"].edit_text(_manual_text(count), reply_markup=_manual_markup())
+    except Exception:
+        pass
+
+
+@Client.on_message(filters.private & filters.incoming, group=-4)
+async def manual_collect(bot, message):
+    user = message.from_user
+    state = _MANUAL.get(user.id) if user else None
+    if not state:
+        return
+    if time.time() - state["t"] > MANUAL_IDLE and not state["busy"]:
+        _MANUAL.pop(user.id, None)
+        return
+    text = (message.text or "").strip()
+    if text.split(maxsplit=1)[:1] == ["/cancel"]:
+        if not state["busy"]:
+            _MANUAL.pop(user.id, None)
+            if state["on_cancel"]:
+                state["on_cancel"]()
+            await message.reply(bold("Cancelled."))
+            return message.stop_propagation()
+        return
+    if text.startswith("/"):
+        return   # other commands still work
+    state["t"] = time.time()
+    if not state["busy"]:
+        state["items"][message.id] = message
+        if not state["task"]:
+            state["task"] = asyncio.create_task(_refresh_panel(state))
+    return message.stop_propagation()
+
+
+@Client.on_callback_query(filters.regex(r"^bm_cancel$") & filters.create(allowed))
+async def manual_cancel(bot, query):
+    state = _MANUAL.get(query.from_user.id)
+    if state and state["busy"]:
+        return await query.answer("Saving... Please Wait.", show_alert=True)
+    _MANUAL.pop(query.from_user.id, None)
+    if state and state["on_cancel"]:
+        state["on_cancel"]()
+    await query.answer("Cancelled.")
+    try:
+        await query.message.edit_text(bold("Cancelled."))
+    except Exception:
+        pass
+
+
+@Client.on_callback_query(filters.regex(r"^bm_done$") & filters.create(allowed))
+async def manual_done(bot, query):
+    uid = query.from_user.id
+    state = _MANUAL.get(uid)
+    if not state:
+        return await query.answer("Expired. Start Again.", show_alert=True)
+    if state["busy"]:
+        return await query.answer("Already Saving...", show_alert=True)
+    if not state["items"]:
+        return await query.answer("Send At Least One Message First.", show_alert=True)
+    state["busy"] = True
+    await query.answer()
+    msgs = [state["items"][k] for k in sorted(state["items"])]   # message ids grow in sending order
+    panel = state["panel"]
+    outlist, failed = [], 0
+    try:
+        for i, m in enumerate(msgs, 1):
+            copy = await _copy_one(bot, m)
+            if copy:
+                outlist.append({"channel_id": LOG_CHANNEL, "msg_id": copy.id})
+            else:
+                failed += 1
+            if i % 10 == 0 or i == len(msgs):
+                try:
+                    await panel.edit_text(bold(
+                        "⏳ Saving the messages to the database channel...\n\n"
+                        f"Done: {i}/{len(msgs)}"
+                    ))
+                except Exception:
+                    pass
+        if not outlist:
+            _MANUAL.pop(uid, None)
+            if state["on_cancel"]:
+                state["on_cancel"]()
+            return await panel.edit_text(bold("❌ Could Not Save Any Of The Messages. Nothing Was Created."))
+        _MANUAL.pop(uid, None)
+        await state["finish"](bot, uid, state, outlist, failed)
+    except Exception as e:
+        traceback.print_exc()
+        _MANUAL.pop(uid, None)
+        if state["on_cancel"]:
+            state["on_cancel"]()
+        try:
+            await panel.edit_text(f"<b>❌ Batch failed:</b>\n<code>{html.escape(type(e).__name__ + ': ' + str(e))}</code>")
+        except Exception:
+            pass
+
+
+async def _finish_manual_batch(bot, admin_id, state, outlist, failed):
+    """/batch -> One By One: same Batch.json + links as the range method."""
+    user, panel = state["user"], state["panel"]
+    filename = f"batchmode_{admin_id}.json"
+    try:
+        with open(filename, "w", encoding="utf-8") as out:
+            json.dump(outlist, out)
+        post = await bot.send_document(
+            LOG_CHANNEL, filename, file_name="Batch.json",
+            caption=bold("⚠️ Batch Generated For Filestore."),
+        )
+    finally:
+        if os.path.exists(filename):
+            os.remove(filename)
+
+    share_link = f"{WEBSITE_URL.rstrip('/')}?start=BATCH-{encode_start(str(post.id))}"
+    permanent_link, share_link = await get_or_create_link(f"batch:manual:{post.id}", share_link)
+    warning = f"⚠️ {failed} message(s) could not be saved and were skipped.\n\n" if failed else ""
+    if permanent_link:
+        final_text = (
+            "<b>⭕ Here is your link:\n\n"
+            f"Contains {len(outlist)} messages.\n\n{warning}"
+            f"🔗 Permanent link: {html.escape(permanent_link)}</b>"
+        )
+    else:
+        final_text = (
+            "<b>⭕ Here is your link:\n\n"
+            f"Contains {len(outlist)} messages.\n\n{warning}"
+            f"🔗 Original link: {html.escape(share_link)}</b>"
+        )
+    await post_links_to_log(
+        bot, post.id, user,
+        [f"<b>📦 Batch:</b> <code>{len(outlist)}</code> <b>messages"
+         + (f" ({failed} skipped)" if failed else "") + "</b>",
+         "<b>📺 Source: Sent One By One</b>"],
+        permanent_link, share_link,
+    )
+    await panel.edit_text(final_text)
+
+
 @Client.on_message(
     filters.command(["batch"]) & filters.create(allowed)
 )
 async def gen_link_batch(bot, message):
+    _MANUAL.pop(message.from_user.id, None)
+    await message.reply(
+        bold("📦 Choose How To Make The Batch"),
+        reply_markup=method_markup("bm_manual", "bm_range", "bcb_cancel"),
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^bm_manual$") & filters.create(allowed))
+async def batch_method_manual(bot, query):
+    await query.answer()
+    await start_manual(query.from_user, query.message, _finish_manual_batch)
+
+
+@Client.on_callback_query(filters.regex(r"^bm_range$") & filters.create(allowed))
+async def batch_method_range(bot, query):
+    await query.answer()
+    try:
+        await query.message.edit_reply_markup(None)
+    except Exception:
+        pass
+    await _range_batch(bot, query.message, query.from_user)
+
+
+async def _range_batch(bot, message, user):
     status = None
 
     try:
@@ -859,7 +1076,7 @@ async def gen_link_batch(bot, message):
                 bot, outlist, originals, status
             )
 
-        filename = f"batchmode_{message.from_user.id}.json"
+        filename = f"batchmode_{user.id}.json"
 
         try:
             with open(filename, "w", encoding="utf-8") as out:
@@ -913,7 +1130,7 @@ async def gen_link_batch(bot, message):
             )
 
         await post_links_to_log(
-            bot, post.id, message.from_user,
+            bot, post.id, user,
             [
                 f"<b>📦 Batch:</b> <code>{len(outlist)}</code> <b>files"
                 + (f" ({kept} kept in source)" if kept else "") + "</b>",
