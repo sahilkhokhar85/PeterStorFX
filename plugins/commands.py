@@ -296,7 +296,7 @@ async def start(client, message):
         file_id = data
         pre = ""
     if data.split("-", 1)[0] == "BATCH":
-        sts = await message.reply("**🔺 ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ**")
+        sts = await message.reply("<b>⏳ Fetching Your Content, Please Wait...</b>")
         file_id = data.split("-", 1)[1]
         msgs = BATCH_FILES.get(file_id)
         if not msgs:
@@ -426,7 +426,7 @@ async def start(client, message):
                 except Exception:
                     continue
 
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.1)
                 continue
 
             rep_caption = None   # caption of the report copy (None = keep the original)
@@ -527,7 +527,7 @@ async def start(client, message):
             filesarr.append(msg)
             titles.append(title)
             report_items.append((info, rep_caption, reply_markup))
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.1)
         try:
             accessed = _kinds_summary([_kind_of(it[0]) for it in report_items]) or "N/A"
             queue_report(
