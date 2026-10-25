@@ -8,8 +8,9 @@
 # Flow (all buttons, no commands):
 #   Links -> Change Link -> send the domain link -> File / Batch -> send the new
 #   content -> preview -> Confirm.
-# Delete Link (Links -> Delete Link): removes only the bot link's saved content (the domain
-# link and the shortener stay the same) after a confirm.
+# Delete Link (Links -> Delete Link): send an old, UNUSED bot link (botserver?start=...). Its saved
+# content is removed from the log channel so it stops working. A bot link that a domain link still
+# uses is refused. Domain links and shortener links are never touched.
 # Confirm updates the Worker record (the shortener is kept) and the saved link in
 # the database, then shows the shortener link and the new bot link so the
 # destination can be edited in the Arolinks dashboard (Arolinks has no API for it).
@@ -140,7 +141,7 @@ async def change_cancel(bot, query):
 async def delete_start(bot, query):
     await query.answer()
     prompt = await query.message.reply_text(
-        bold("🗑 Delete Link\n\nSend The Domain Link Of The Bot Link You Want To Delete."),
+        bold("🗑 Delete Link\n\nSend The Bot Link You Want To Delete.\nOnly An Unused Link Can Be Deleted."),
         reply_markup=_cancel_markup(),
     )
     _FLOW[query.from_user.id] = {
@@ -216,6 +217,34 @@ async def collect(bot, message):
     state["t"] = time.time()
     step = state["step"]
 
+    if step == "link" and state.get("mode") == "delete":
+        param = _start_param(text)
+        if not param:
+            await message.reply_text(bold("❌ Send A Valid Bot Link."))
+            return message.stop_propagation()
+        user_doc = await _link_in_use(param)
+        if user_doc:
+            await message.reply_text(
+                bold("❌ This Bot Link Is Still In Use By:\n\n")
+                + f"<code>{html.escape(user_doc.get('permanent_url') or '-')}</code>\n\n"
+                + bold("Use Change Link First, Then Delete The Old Bot Link.")
+            )
+            return message.stop_propagation()
+        label, log_id = await _describe_old(bot, text)
+        gone = True
+        if log_id:
+            try:
+                saved = await bot.get_messages(LOG_CHANNEL, log_id)
+                gone = (not saved) or bool(getattr(saved, "empty", False))
+            except Exception:
+                gone = True
+        if not log_id or gone:
+            await message.reply_text(bold("❌ Nothing Is Saved For This Bot Link (Already Deleted Or Not Valid)."))
+            return message.stop_propagation()
+        state.update(step="dconfirm", dparam=param, dlink=text, old={"label": label, "log_id": log_id})
+        await _show(state, _delete_text(state), _delete_markup())
+        return message.stop_propagation()
+
     if step == "link":
         m = re.search(r"https?://[^\s/]+/([A-Za-z0-9_-]+)/?\s*$", text)
         if not m:
@@ -227,13 +256,6 @@ async def collect(bot, message):
             await message.reply_text(bold("❌ This Link Is Not In The Database."))
             return message.stop_propagation()
         label, old_id = await _describe_old(bot, doc.get("share_link"))
-        if state.get("mode") == "delete":
-            if not doc.get("share_link"):
-                await message.reply_text(bold("❌ This Link Has No Content Left (Already Deleted)."))
-                return message.stop_propagation()
-            state.update(step="dconfirm", doc=doc, key=key, old={"label": label, "log_id": old_id})
-            await _show(state, _delete_text(state), _delete_markup())
-            return message.stop_propagation()
         state.update(step="choose", doc=doc, key=key,
                      old={"label": label, "log_id": old_id})
         await _show(
@@ -375,19 +397,25 @@ async def _build_batch(bot, admin_id, state, chat_id, first_id, last_id, cache_k
 
 # ---------------- delete link ----------------
 
+async def _link_in_use(param):
+    """The saved link (database) whose bot link has this start parameter, if any."""
+    return await links_col.find_one({"share_link": {"$regex": f"[?&]start={re.escape(param)}$"}})
+
+
 def _delete_text(state):
-    label, log_id = state["old"]["label"], state["old"]["log_id"]
-    lines = ["🗑 DELETE THIS BOT LINK?", "", f"Content: {html.escape(label)}", "", "This Will Remove:"]
-    if log_id:
-        lines.append("• The Saved Batch List In The Log Channel (The Files Stay)"
-                     if label.startswith("Batch") else "• The Saved Content In The Log Channel")
-        lines.append("• So The Bot Link Stops Working")
-    else:
-        lines.append("• The Saved Link Record (No Saved Content Was Found)")
-    lines += ["", "The Domain Link And The Arolinks Short Link Stay The Same.",
-              "You Can Point Them To New Content Later With Change Link."]
-    return (bold("\n".join(lines))
-            + "\n\n" + bold("Domain Link:") + f"\n<code>{html.escape(state['doc'].get('permanent_url') or '')}</code>")
+    label = state["old"]["label"]
+    lines = [
+        "🗑 DELETE THIS BOT LINK?", "",
+        f"Content: {html.escape(label)}",
+        "Status: Not Used By Any Domain Link", "",
+        "This Will Remove:",
+        "• The Saved Batch List In The Log Channel (The Files Stay)" if label.startswith("Batch")
+        else "• The Saved Content In The Log Channel",
+        "• So This Bot Link Stops Working", "",
+        "Domain Links And Short Links Are Not Touched.",
+        "Make Sure No Short Link Still Uses This Bot Link.",
+    ]
+    return bold("\n".join(lines)) + "\n\n" + bold("Bot Link:") + f"\n<code>{html.escape(state['dlink'])}</code>"
 
 
 def _delete_markup():
@@ -406,39 +434,20 @@ async def delete_confirm(bot, query):
         return await query.answer("Expired. Open Delete Link again.", show_alert=True)
     state["step"] = "deleting"        # a second tap finds nothing to do
     await query.answer("Deleting...")
+    # checked again: the link may have been put to use while this screen was open
+    user_doc = await _link_in_use(state["dparam"])
+    if user_doc:
+        _FLOW.pop(admin_id, None)
+        return await _show(state, bold("❌ This Bot Link Is In Use Now. Nothing Was Deleted."), _close_markup())
     await _show(state, bold("⏳ Deleting The Bot Link..."))
-
-    doc = state["doc"]
-    # The domain link and the shortener are NOT touched. The saved link is kept as an
-    # empty record, so Change Link can still find this domain link later and point it
-    # to new content. (A new /link for the same file is unaffected: it gets its own link.)
-    now = datetime.now(timezone.utc)
-    await links_col.delete_one({"_id": doc["_id"]})
-    await links_col.update_one(
-        {"_id": f"deleted:{state['key']}"},
-        {"$set": {"share_link": None, "permanent_url": doc["permanent_url"], "updated_at": now},
-         "$setOnInsert": {"created_at": now}},
-        upsert=True,
-    )
-    content = "—"
-    old_id = state["old"]["log_id"]
-    if old_id:
-        try:
-            await bot.delete_messages(LOG_CHANNEL, old_id)
-            content = "Removed"
-        except Exception as e:
-            print(f"DELETE LINK LOG ERROR: {type(e).__name__}: {e}")
-            content = "Could Not Be Removed"
+    try:
+        await bot.delete_messages(LOG_CHANNEL, state["old"]["log_id"])
+        result = bold("✅ BOT LINK DELETED !!\n\n📦 Log Channel Content: Removed\n🔗 Bot Link: Stopped")
+    except Exception as e:
+        print(f"DELETE LINK LOG ERROR: {type(e).__name__}: {e}")
+        result = bold("❌ Could Not Delete The Saved Content.\nNothing Was Changed.")
     _FLOW.pop(admin_id, None)
-    await _show(
-        state,
-        bold("✅ BOT LINK DELETED !!\n\n"
-             f"📦 Log Channel Content: {content}\n"
-             "🔗 Bot Link: Stopped\n\n"
-             "🌐 Domain Link: Same\n"
-             "🔗 Shortener: Same"),
-        InlineKeyboardMarkup([[InlineKeyboardButton("❌ Close", callback_data="lnk_close")]]),
-    )
+    await _show(state, result, _close_markup())
 
 
 # ---------------- confirm ----------------
