@@ -8,8 +8,8 @@
 # Flow (all buttons, no commands):
 #   Links -> Change Link -> send the domain link -> File / Batch -> send the new
 #   content -> preview -> Confirm.
-# Delete Link (Links -> Delete Link): removes a link completely (Worker record, saved
-# content in the log channel, database record) after a confirm.
+# Delete Link (Links -> Delete Link): removes only the bot link's saved content (the domain
+# link and the shortener stay the same) after a confirm.
 # Confirm updates the Worker record (the shortener is kept) and the saved link in
 # the database, then shows the shortener link and the new bot link so the
 # destination can be edited in the Arolinks dashboard (Arolinks has no API for it).
@@ -90,6 +90,8 @@ async def _describe_old(bot, share_link):
     """Returns (label, log_id) for what the bot link gives now. log_id is the
     log-channel message that "Delete Old" removes: the stored message itself,
     or Batch.json for a batch (without it the old batch link stops working)."""
+    if not share_link:
+        return "Nothing (Deleted)", None
     param = _start_param(share_link)
     try:
         if param and param.startswith("BATCH-"):
@@ -113,16 +115,15 @@ async def _describe_old(bot, share_link):
 
 @Client.on_callback_query(filters.regex(r"^lnk_change$") & owner_only)
 async def change_start(bot, query):
-    state = _FLOW[query.from_user.id] = {
-        "step": "link", "t": time.time(), "prompt": query.message,
+    await query.answer()
+    prompt = await query.message.reply_text(
+        bold("✏️ Change Link\n\nSend The Domain Link Of The Post You Want To Change."),
+        reply_markup=_cancel_markup(),
+    )
+    _FLOW[query.from_user.id] = {
+        "step": "link", "t": time.time(), "prompt": prompt,
         "doc": None, "old": None, "new": None,
     }
-    await query.answer()
-    await _show(
-        state,
-        bold("✏️ Change Link\n\nSend The Domain Link Of The Post You Want To Change."),
-        _cancel_markup(),
-    )
 
 
 @Client.on_callback_query(filters.regex(r"^lnk_cancel$") & owner_only)
@@ -137,16 +138,15 @@ async def change_cancel(bot, query):
 
 @Client.on_callback_query(filters.regex(r"^lnk_delete$") & owner_only)
 async def delete_start(bot, query):
-    state = _FLOW[query.from_user.id] = {
-        "step": "link", "t": time.time(), "prompt": query.message,
+    await query.answer()
+    prompt = await query.message.reply_text(
+        bold("🗑 Delete Link\n\nSend The Domain Link Of The Bot Link You Want To Delete."),
+        reply_markup=_cancel_markup(),
+    )
+    _FLOW[query.from_user.id] = {
+        "step": "link", "t": time.time(), "prompt": prompt,
         "doc": None, "old": None, "new": None, "mode": "delete",
     }
-    await query.answer()
-    await _show(
-        state,
-        bold("🗑 Delete Link\n\nSend The Domain Link You Want To Delete."),
-        _cancel_markup(),
-    )
 
 
 @Client.on_callback_query(filters.regex(r"^lnk_pick:(file|batch)$") & owner_only)
@@ -228,6 +228,9 @@ async def collect(bot, message):
             return message.stop_propagation()
         label, old_id = await _describe_old(bot, doc.get("share_link"))
         if state.get("mode") == "delete":
+            if not doc.get("share_link"):
+                await message.reply_text(bold("❌ This Link Has No Content Left (Already Deleted)."))
+                return message.stop_propagation()
             state.update(step="dconfirm", doc=doc, key=key, old={"label": label, "log_id": old_id})
             await _show(state, _delete_text(state), _delete_markup())
             return message.stop_propagation()
@@ -373,17 +376,18 @@ async def _build_batch(bot, admin_id, state, chat_id, first_id, last_id, cache_k
 # ---------------- delete link ----------------
 
 def _delete_text(state):
-    label = state["old"]["label"]
-    lines = [
-        "🗑 DELETE THIS LINK?\n\nContent: " + html.escape(label) + "\n\nThis Will Remove:",
-        "• The Domain Link (It Stops Working)",
-    ]
-    if state["old"]["log_id"]:
+    label, log_id = state["old"]["label"], state["old"]["log_id"]
+    lines = ["🗑 DELETE THIS BOT LINK?", "", f"Content: {html.escape(label)}", "", "This Will Remove:"]
+    if log_id:
         lines.append("• The Saved Batch List In The Log Channel (The Files Stay)"
                      if label.startswith("Batch") else "• The Saved Content In The Log Channel")
-    lines += ["• The Link Record In The Database", "", "The Arolinks Short Link Is Not Touched."]
+        lines.append("• So The Bot Link Stops Working")
+    else:
+        lines.append("• The Saved Link Record (No Saved Content Was Found)")
+    lines += ["", "The Domain Link And The Arolinks Short Link Stay The Same.",
+              "You Can Point Them To New Content Later With Change Link."]
     return (bold("\n".join(lines))
-            + "\n\n" + bold("Link:") + f"\n<code>{html.escape(state['doc'].get('permanent_url') or '')}</code>")
+            + "\n\n" + bold("Domain Link:") + f"\n<code>{html.escape(state['doc'].get('permanent_url') or '')}</code>")
 
 
 def _delete_markup():
@@ -391,24 +395,6 @@ def _delete_markup():
         InlineKeyboardButton("✅ Confirm Delete", callback_data="lnk_delyes"),
         InlineKeyboardButton("❌ Cancel", callback_data="lnk_cancel"),
     ]])
-
-
-async def _worker_delete(key):
-    """Returns an error text, or None when the Worker removed the domain link."""
-    if not PERMANENT_LINK_WORKER_URL or not PERMANENT_LINK_ADMIN_KEY:
-        return "Worker URL or admin key is missing."
-    url = f"{PERMANENT_LINK_WORKER_URL.rstrip('/')}/admin/delete"
-    headers = {"Content-Type": "application/json", "X-Admin-Key": PERMANENT_LINK_ADMIN_KEY}
-    try:
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json={"key": key}, headers=headers) as r:
-                if r.status != 200:
-                    return f"Worker replied HTTP {r.status}."
-                data = json.loads(await r.text())
-                return None if data.get("success") else str(data.get("error") or "Worker refused.")
-    except Exception as e:
-        return f"{type(e).__name__}"
 
 
 @Client.on_callback_query(filters.regex(r"^lnk_delyes$") & owner_only)
@@ -420,18 +406,20 @@ async def delete_confirm(bot, query):
         return await query.answer("Expired. Open Delete Link again.", show_alert=True)
     state["step"] = "deleting"        # a second tap finds nothing to do
     await query.answer("Deleting...")
-    await _show(state, bold("⏳ Deleting The Link..."))
+    await _show(state, bold("⏳ Deleting The Bot Link..."))
 
-    error = await _worker_delete(state["key"])
-    if error:
-        state["step"] = "dconfirm"
-        return await _show(
-            state,
-            bold(f"❌ Could Not Delete The Link.\n{html.escape(error)}\n\nNothing Was Deleted."),
-            _delete_markup(),
-        )
-
-    await links_col.delete_one({"_id": state["doc"]["_id"]})
+    doc = state["doc"]
+    # The domain link and the shortener are NOT touched. The saved link is kept as an
+    # empty record, so Change Link can still find this domain link later and point it
+    # to new content. (A new /link for the same file is unaffected: it gets its own link.)
+    now = datetime.now(timezone.utc)
+    await links_col.delete_one({"_id": doc["_id"]})
+    await links_col.update_one(
+        {"_id": f"deleted:{state['key']}"},
+        {"$set": {"share_link": None, "permanent_url": doc["permanent_url"], "updated_at": now},
+         "$setOnInsert": {"created_at": now}},
+        upsert=True,
+    )
     content = "—"
     old_id = state["old"]["log_id"]
     if old_id:
@@ -444,8 +432,11 @@ async def delete_confirm(bot, query):
     _FLOW.pop(admin_id, None)
     await _show(
         state,
-        bold("✅ LINK DELETED !!\n\n🌐 Domain Link: Removed\n🗄 Database: Removed\n"
-             f"📦 Log Channel Content: {content}"),
+        bold("✅ BOT LINK DELETED !!\n\n"
+             f"📦 Log Channel Content: {content}\n"
+             "🔗 Bot Link: Stopped\n\n"
+             "🌐 Domain Link: Same\n"
+             "🔗 Shortener: Same"),
         InlineKeyboardMarkup([[InlineKeyboardButton("❌ Close", callback_data="lnk_close")]]),
     )
 
