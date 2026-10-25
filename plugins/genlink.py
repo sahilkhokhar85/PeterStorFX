@@ -1,6 +1,7 @@
 
 import re
 import os
+import secrets
 import json
 import base64
 import aiohttp
@@ -227,19 +228,39 @@ def make_file_share_link(log_message_id):
     return f"{WEBSITE_URL.rstrip('/')}?start={encoded}"
 
 
-def reply_link_text(permanent_link, share_link):
-    if permanent_link:
-        return (
-            "<b>⭕ Here is your link:\n\n"
-            f"🔗 Permanent link: "
-            f"{html.escape(permanent_link)}</b>"
-        )
+def _plural(n, word):
+    return f"{n} {word}{'' if n == 1 else 's'}"
 
-    return (
-        "<b>⭕ Here is your link:\n\n"
-        f"🔗 Original link: "
-        f"{html.escape(share_link)}</b>"
-    )
+
+def link_text(permanent_link, share_link, count=None, note="", bot_only=False):
+    """The "your link is ready" message. Bold text, the link itself in monospace
+    (tap to copy). `count` is set for a batch, `note` is an optional warning line."""
+    if bot_only:
+        head, label, link = "✅ BOT LINK GENERATED !!", "🤖 Bot Link:", share_link
+    elif permanent_link:
+        head = "✅ BATCH LINK GENERATED !!" if count else "✅ LINK GENERATED !!"
+        label, link = "🔗 Permanent Link:", permanent_link
+    else:
+        head = "✅ BATCH LINK GENERATED !!" if count else "✅ LINK GENERATED !!"
+        label, link = "🖇 Original Link:", share_link
+    if bot_only and count:
+        head = "✅ BOT LINK GENERATED !!"
+    lines = [head, ""]
+    if count:
+        lines += [f"📦 Contains: {_plural(count, 'Message')}", ""]
+    if note:
+        lines += [note, ""]
+    lines.append(label)
+    return "<b>" + "\n".join(lines) + f"</b>\n<code>{html.escape(link)}</code>"
+
+
+def reply_link_text(permanent_link, share_link):
+    return link_text(permanent_link, share_link)
+
+
+def bot_link_text(share_link):
+    """Reply for "Bot Link Only": just the bot link (no domain link, no shortener)."""
+    return link_text(None, share_link, bot_only=True)
 
 
 def _human_size(size):
@@ -292,13 +313,34 @@ async def post_links_to_log(bot, reply_to_id, admin, info_lines, permanent_link,
         print(f"LOG LINKS ERROR: {type(e).__name__}: {e}")
 
 
-async def build_link_reply(source_message, bot=None, admin=None):
+async def build_link_reply(source_message, bot=None, admin=None, bot_only=False):
     """Create (or reuse) the link for one media message and return the reply
     text. This is the only place that copies a file into LOG_CHANNEL. When a
     new file was stored and `bot` is given, its links are posted right under
     it in LOG_CHANNEL."""
     cache_key = get_message_cache_key(source_message)
     saved = await get_saved_link(cache_key)
+
+    if bot_only:
+        # Only the bot link: no domain link, no shortener, nothing saved in the Worker/database.
+        stored_id = None
+        if saved and saved.get("share_link"):
+            share_link = saved["share_link"]
+        else:
+            post = await copy_keep_cover(source_message, LOG_CHANNEL)
+            share_link = make_file_share_link(post.id)
+            stored_id = post.id
+        if bot and stored_id:
+            name, size = _file_info(source_message)
+            await post_links_to_log(
+                bot, stored_id, admin,
+                [
+                    f"<b>🎬 File:</b> <code>{html.escape(name)}</code>",
+                    f"<b>📦 Size: {_human_size(size)}</b>",
+                ],
+                None, share_link,
+            )
+        return bot_link_text(share_link)
 
     if saved and saved.get("permanent_url"):
         return reply_link_text(
@@ -349,20 +391,15 @@ async def incoming_gen_link(bot, message):
     await message.reply(
         bold("Generate A Link For This File?"),
         quote=True,
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                "✅ Generate Link",
-                callback_data=f"gl_yes:{message.id}",
-            ),
-            InlineKeyboardButton(
-                "❌ Cancel",
-                callback_data=f"gl_no:{message.id}",
-            ),
-        ]]),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Generate Link", callback_data=f"gl_yes:{message.id}")],
+            [InlineKeyboardButton("🤖 Bot Link Only", callback_data=f"gl_bot:{message.id}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data=f"gl_no:{message.id}")],
+        ]),
     )
 
 
-@Client.on_callback_query(filters.regex(r"^gl_(yes|no):\d+$"))
+@Client.on_callback_query(filters.regex(r"^gl_(yes|no|bot):\d+$"))
 async def gen_link_answer(bot, query):
     user_id = query.from_user.id
 
@@ -391,7 +428,7 @@ async def gen_link_answer(bot, query):
             return await prompt.edit_text(
                 bold("❌ That File Is No Longer Available. Send It Again.")
             )
-        text = await build_link_reply(source, bot, query.from_user)
+        text = await build_link_reply(source, bot, query.from_user, bot_only=(action == "gl_bot"))
     except FloodWait as e:
         return await prompt.edit_text(
             bold(f"❌ Telegram Is Busy. Try Again In {int(e.value)} Seconds.")
@@ -425,10 +462,11 @@ async def gen_link_s(bot, message):
     await message.reply(
         bold("Generate A Link For This Message?"),
         quote=True,
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Confirm", callback_data=f"gl_yes:{replied.id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"gl_no:{replied.id}"),
-        ]]),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Generate Link", callback_data=f"gl_yes:{replied.id}")],
+            [InlineKeyboardButton("🤖 Bot Link Only", callback_data=f"gl_bot:{replied.id}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data=f"gl_no:{replied.id}")],
+        ]),
     )
 
 
@@ -736,6 +774,45 @@ async def batch_cancel_button(bot, query):
         pass
 
 
+# ---------------- link type question (batch) ----------------
+_TYPE_WAIT = {}   # token -> (user id, future)
+
+
+async def ask_link_type(bot, chat_id, user_id, panel=None):
+    """Asks "Generate Link" or "Bot Link Only". Returns ("full" | "bot" | "no", message shown)."""
+    token = secrets.token_hex(4)
+    fut = asyncio.get_running_loop().create_future()
+    _TYPE_WAIT[token] = (user_id, fut)
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Generate Link", callback_data=f"bt:full:{token}")],
+        [InlineKeyboardButton("🤖 Bot Link Only", callback_data=f"bt:bot:{token}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data=f"bt:no:{token}")],
+    ])
+    text = bold("Choose The Link Type")
+    try:
+        if panel is not None:
+            await panel.edit_text(text, reply_markup=markup)
+            shown = panel
+        else:
+            shown = await bot.send_message(chat_id, text, reply_markup=markup)
+        choice = await asyncio.wait_for(fut, timeout=300)
+    except asyncio.TimeoutError:
+        choice, shown = "no", panel
+    finally:
+        _TYPE_WAIT.pop(token, None)
+    return choice, shown
+
+
+@Client.on_callback_query(filters.regex(r"^bt:(full|bot|no):[0-9a-f]+$") & filters.create(allowed))
+async def link_type_answer(bot, query):
+    _, choice, token = query.data.split(":")
+    waiting = _TYPE_WAIT.get(token)
+    if not waiting or waiting[0] != query.from_user.id or waiting[1].done():
+        return await query.answer("Expired. Start Again.", show_alert=True)
+    await query.answer()
+    waiting[1].set_result(choice)
+
+
 # ---------------- method choice ----------------
 # /batch first asks HOW the batch is made:
 #   1) Send Messages One By One  - anything (files, text, photos...) sent or forwarded to the
@@ -770,12 +847,13 @@ def _manual_text(count):
     )
 
 
-async def start_manual(user, panel, finish, on_cancel=None):
+async def start_manual(user, panel, finish, on_cancel=None, ask_type=False):
     """Open the one-by-one collector. `panel` is the bot message that shows the counter;
     `finish(bot, admin_id, state, outlist, failed)` is called after Done."""
     _MANUAL[user.id] = {
         "items": {}, "panel": panel, "t": time.time(), "busy": False, "user": user,
         "finish": finish, "on_cancel": on_cancel, "shown": 0, "task": None,
+        "ask_type": ask_type, "bot_only": False,
     }
     try:
         await panel.edit_text(_manual_text(0), reply_markup=_manual_markup())
@@ -851,8 +929,20 @@ async def manual_done(bot, query):
         return await query.answer("Send At Least One Message First.", show_alert=True)
     state["busy"] = True
     await query.answer()
-    msgs = [state["items"][k] for k in sorted(state["items"])]   # message ids grow in sending order
     panel = state["panel"]
+    if state.get("ask_type"):
+        choice, _shown = await ask_link_type(bot, query.message.chat.id, uid, panel=panel)
+        if choice == "no":
+            _MANUAL.pop(uid, None)
+            if state["on_cancel"]:
+                state["on_cancel"]()
+            try:
+                await panel.edit_text(bold("Cancelled."))
+            except Exception:
+                pass
+            return
+        state["bot_only"] = (choice == "bot")
+    msgs = [state["items"][k] for k in sorted(state["items"])]   # message ids grow in sending order
     outlist, failed = [], 0
     try:
         for i, m in enumerate(msgs, 1):
@@ -903,20 +993,13 @@ async def _finish_manual_batch(bot, admin_id, state, outlist, failed):
             os.remove(filename)
 
     share_link = f"{WEBSITE_URL.rstrip('/')}?start=BATCH-{encode_start(str(post.id))}"
-    permanent_link, share_link = await get_or_create_link(f"batch:manual:{post.id}", share_link)
-    warning = f"⚠️ {failed} message(s) could not be saved and were skipped.\n\n" if failed else ""
-    if permanent_link:
-        final_text = (
-            "<b>⭕ Here is your link:\n\n"
-            f"Contains {len(outlist)} messages.\n\n{warning}"
-            f"🔗 Permanent link: {html.escape(permanent_link)}</b>"
-        )
+    if state.get("bot_only"):
+        permanent_link = None   # Bot Link Only: no domain link, no shortener, nothing saved
     else:
-        final_text = (
-            "<b>⭕ Here is your link:\n\n"
-            f"Contains {len(outlist)} messages.\n\n{warning}"
-            f"🔗 Original link: {html.escape(share_link)}</b>"
-        )
+        permanent_link, share_link = await get_or_create_link(f"batch:manual:{post.id}", share_link)
+    note = f"⚠️ Skipped: {_plural(failed, 'Message')}" if failed else ""
+    final_text = link_text(permanent_link, share_link, count=len(outlist), note=note,
+                           bot_only=bool(state.get("bot_only")))
     await post_links_to_log(
         bot, post.id, user,
         [f"<b>📦 Batch:</b> <code>{len(outlist)}</code> <b>messages"
@@ -941,7 +1024,7 @@ async def gen_link_batch(bot, message):
 @Client.on_callback_query(filters.regex(r"^bm_manual$") & filters.create(allowed))
 async def batch_method_manual(bot, query):
     await query.answer()
-    await start_manual(query.from_user, query.message, _finish_manual_batch)
+    await start_manual(query.from_user, query.message, _finish_manual_batch, ask_type=True)
 
 
 @Client.on_callback_query(filters.regex(r"^bm_range$") & filters.create(allowed))
@@ -1043,7 +1126,18 @@ async def _range_batch(bot, message, user):
                 )
             )
 
-        status = await message.reply(
+        choice, shown = await ask_link_type(bot, message.chat.id, user.id)
+        if choice == "no":
+            try:
+                if shown is not None:
+                    await shown.edit_text(bold("Cancelled."))
+            except Exception:
+                pass
+            return
+        bot_only = (choice == "bot")
+
+        status = shown
+        await status.edit_text(
             bold(
                 "Generating link for your messages.\n"
                 "This may take time depending on the number of messages."
@@ -1100,34 +1194,16 @@ async def _range_batch(bot, message, user):
             f"?start=BATCH-{encoded}"
         )
 
-        permanent_link, share_link = await get_or_create_link(
-            batch_cache_key,
-            share_link,
-        )
-
-        warning = ""
-        if kept:
-            warning = (
-                f"⚠️ {kept} message(s) could not be copied to the database "
-                "channel and still come from the source channel.\n\n"
-            )
-
-        if permanent_link:
-            final_text = (
-                "<b>⭕ Here is your link:\n\n"
-                f"Contains {len(outlist)} messages.\n\n"
-                f"{warning}"
-                f"🔗 Permanent link: "
-                f"{html.escape(permanent_link)}</b>"
-            )
+        if bot_only:
+            permanent_link = None   # Bot Link Only: no domain link, no shortener, nothing saved
         else:
-            final_text = (
-                "<b>⭕ Here is your link:\n\n"
-                f"Contains {len(outlist)} messages.\n\n"
-                f"{warning}"
-                f"🔗 Original link: "
-                f"{html.escape(share_link)}</b>"
+            permanent_link, share_link = await get_or_create_link(
+                batch_cache_key,
+                share_link,
             )
+
+        note = (f"⚠️ {_plural(kept, 'Message')} Still Come From The Source Channel") if kept else ""
+        final_text = link_text(permanent_link, share_link, count=len(outlist), note=note, bot_only=bot_only)
 
         await post_links_to_log(
             bot, post.id, user,
