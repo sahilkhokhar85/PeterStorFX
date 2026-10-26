@@ -20,12 +20,8 @@ DEFAULTS = {
     "force_sub": False,
     "force_sub_channels": [],          # list of channel ids or @usernames
     "force_sub_message": (
-        "🔴 <b>Please Join My Updates Channel To Use This Bot!</b> 🔴\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
-        "🎬 <b>Latest Movies | TV Shows | Web Series Paane Ke Liye</b>\n"
-        "👉 <i>Please join all our upcoming channels first.</i>\n\n"
-        "⚠️ <b>Channels join karne ke baad hi aap bot use kar sakte hain.</b>\n"
-        "🔄 <i>Join karne ke baad \"Try Again\" par click karein aur episode mil jayenge.</i> ✅"
+        "<b>📢 Join Our Channel To Use This Bot !!\n\n"
+        "✅ After Joining, 👇 Tap \"Try Again\".</b>"
     ),
     "force_sub_photo": None,           # file_id of a photo to show with the force-sub prompt (None = text only)
     "protect_content": False,
@@ -38,6 +34,9 @@ DEFAULTS = {
     "public_mode": None,               # unused: the bot is always private (see _apply_code_controlled)
     "last_used": None,                 # unix timestamp, updated whenever /settings is opened
 }
+
+
+_OLD_FORCE_SUB_MARKERS = ("ᴘʟᴇᴀꜱᴇ ᴊᴏɪɴ ᴍʏ ᴜᴘᴅᴀᴛᴇꜱ", "Please Join My Updates Channel")
 
 
 def _apply_code_controlled(doc):
@@ -66,6 +65,12 @@ async def get_settings():
         if k not in doc:
             doc[k] = v
             changed = True
+    # The old default force-sub text (small-caps or Title Case copy saved in MongoDB) is replaced
+    # once by the new default. A message the admin wrote himself is never touched.
+    saved_msg = doc.get("force_sub_message") or ""
+    if any(m in saved_msg for m in _OLD_FORCE_SUB_MARKERS):
+        doc["force_sub_message"] = DEFAULTS["force_sub_message"]
+        changed = True
     if changed:
         await _col.update_one({"_id": "settings"}, {"$set": doc}, upsert=True)
     return _apply_code_controlled(doc)
