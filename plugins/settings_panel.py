@@ -43,12 +43,12 @@ def main_menu_text(settings):
 
 def main_menu_markup():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 ꜰᴏʀᴄᴇ ꜱᴜʙꜱᴄʀɪʙᴇ", callback_data="adm_fsub"),
-         InlineKeyboardButton("👥 ᴀᴅᴍɪɴꜱ", callback_data="adm_admins")],
-        [InlineKeyboardButton("📊 ʙᴏᴛ ꜱᴛᴀᴛᴜꜱ", callback_data="adm_status"),
-         InlineKeyboardButton("⏱ ʀᴇꜱᴛᴀʀᴛ ʙᴏᴛ", callback_data="adm_restart")],
-        [InlineKeyboardButton("🔗 ʟɪɴᴋꜱ", callback_data="adm_links"),
-         InlineKeyboardButton("✖ ᴄʟᴏꜱᴇ", callback_data="adm_close")],
+        [InlineKeyboardButton("📢 Force Subscribe", callback_data="adm_fsub"),
+         InlineKeyboardButton("👥 Admins", callback_data="adm_admins")],
+        [InlineKeyboardButton("📊 Bot Status", callback_data="adm_status"),
+         InlineKeyboardButton("⏱ Restart Bot", callback_data="adm_restart")],
+        [InlineKeyboardButton("🔗 Links", callback_data="adm_links"),
+         InlineKeyboardButton("✖ Close", callback_data="adm_close")],
     ])
 
 
@@ -106,12 +106,12 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
         await _edit(query.message,
             "<b>🔗 LINKS !!</b>\n\n<b>👇 Choose An Option Below</b>",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✏️ ᴄʜᴀɴɢᴇ ʟɪɴᴋ", callback_data="lnk_change"),
-                 InlineKeyboardButton("🗑 ᴅᴇʟᴇᴛᴇ ʟɪɴᴋ", callback_data="lnk_delete")],
-                [InlineKeyboardButton("📭 ᴇᴍᴘᴛʏ ʟɪɴᴋꜱ", callback_data="lnk_empty"),
-                 InlineKeyboardButton("🤖 ᴜɴᴜꜱᴇᴅ ʙᴏᴛ ʟɪɴᴋꜱ", callback_data="lnk_unused")],
-                [InlineKeyboardButton("🧹 ꜰʀᴇᴇ ᴀ ʟɪɴᴋ", callback_data="lnk_free")],
-                [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
+                [InlineKeyboardButton("✏️ Change Link", callback_data="lnk_change"),
+                 InlineKeyboardButton("🗑 Delete Link", callback_data="lnk_delete")],
+                [InlineKeyboardButton("📭 Empty Links", callback_data="lnk_empty"),
+                 InlineKeyboardButton("🤖 Unused Bot Links", callback_data="lnk_unused")],
+                [InlineKeyboardButton("🧹 Free A Link", callback_data="lnk_free")],
+                [InlineKeyboardButton("« Back", callback_data="adm_menu")],
             ]),
         )
 
@@ -136,7 +136,7 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
             f"<b>⚡ Uptime -</b> <code>{uptime}</code>"
         )
         await _edit(query.message, text, reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")]]
+            [[InlineKeyboardButton("« Back", callback_data="adm_menu")]]
         ))
 
     # ---------------- Restart Bot ----------------
@@ -192,7 +192,7 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
         buttons = []
         for adm in admins:
             buttons.append([InlineKeyboardButton(f"👤 {adm['_id']}", callback_data=f"adm_admin_view_{adm['_id']}")])
-        buttons.append([InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_admins")])
+        buttons.append([InlineKeyboardButton("« Back", callback_data="adm_admins")])
         await _edit(query.message, "<b>Tap an admin to manage:</b>", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data.startswith("adm_admin_view_"):
@@ -249,8 +249,8 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
                     await ans.reply_text(
                         f"<i>Choose Force Sub Mode</i>",
                         reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("ɴᴏʀᴍᴀʟ ᴍᴏᴅᴇ", callback_data=f"adm_fsub_mode_normal_{chat.id}")],
-                            [InlineKeyboardButton("ᴊᴏɪɴ ʀᴇǫᴜᴇꜱᴛ ᴍᴏᴅᴇ", callback_data=f"adm_fsub_mode_request_{chat.id}")],
+                            [InlineKeyboardButton("Normal Mode", callback_data=f"adm_fsub_mode_normal_{chat.id}")],
+                            [InlineKeyboardButton("Join Request Mode", callback_data=f"adm_fsub_mode_request_{chat.id}")],
                         ])
                     )
             except Exception as e:
@@ -282,7 +282,7 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
                 await _edit(query.message,
                     f"<b>❌ Couldn't create a join-request link for {title}.</b>\n<code>{e}</code>\n\n"
                     "Make sure I'm an admin there with the <b>Invite Users via Link</b> permission.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ ʙᴀᴄᴋ", callback_data="adm_fsub")]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Back", callback_data="adm_fsub")]])
                 )
                 return
 
@@ -290,7 +290,7 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
         mode_label = "Join Request Mode" if mode == "request" else "Normal Mode"
         await _edit(query.message,
             f"✨ <i>Successfully Added {title} As Your Force Sub Channel</i>\n<b>Mode:</b> {mode_label}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ ʙᴀᴄᴋ", callback_data="adm_fsub")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Back", callback_data="adm_fsub")]])
         )
 
     elif data == "adm_fsub_remove":
@@ -308,7 +308,7 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
                 label = str(ch)
             tag = " (Request)" if mode == "request" else ""
             buttons.append([InlineKeyboardButton(f"❌ {label}{tag}", callback_data=f"adm_fsub_rm_{ch}")])
-        buttons.append([InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_fsub")])
+        buttons.append([InlineKeyboardButton("« Back", callback_data="adm_fsub")])
         await _edit(query.message, "<b>Tap a channel to remove it:</b>", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data.startswith("adm_fsub_rm_"):
@@ -361,13 +361,13 @@ async def render_fsub_menu(query, settings, edit=True):
         f"<b>Force Pic:</b> {pic_state}"
     )
     buttons = [
-        [InlineKeyboardButton("➕ ᴀᴅᴅ ᴄʜᴀɴɴᴇʟ", callback_data="adm_fsub_add"),
-         InlineKeyboardButton("➖ ʀᴇᴍᴏᴠᴇ ᴄʜᴀɴɴᴇʟ", callback_data="adm_fsub_remove")],
-        [InlineKeyboardButton("ᴛᴏɢɢʟᴇ ᴏɴ/ᴏꜰꜰ", callback_data="adm_fsub_toggle")],
-        [InlineKeyboardButton("✏️ ᴇᴅɪᴛ ᴍᴇꜱꜱᴀɢᴇ", callback_data="adm_fsub_msg")],
-        [InlineKeyboardButton("🖼 ꜱᴇᴛ ꜰᴏʀᴄᴇ ᴘɪᴄ", callback_data="adm_fsub_pic"),
-         InlineKeyboardButton("🗑 ʀᴇᴍᴏᴠᴇ ᴘɪᴄ", callback_data="adm_fsub_pic_rm")],
-        [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
+        [InlineKeyboardButton("➕ Add Channel", callback_data="adm_fsub_add"),
+         InlineKeyboardButton("➖ Remove Channel", callback_data="adm_fsub_remove")],
+        [InlineKeyboardButton("Toggle On/Off", callback_data="adm_fsub_toggle")],
+        [InlineKeyboardButton("✏️ Edit Message", callback_data="adm_fsub_msg")],
+        [InlineKeyboardButton("🖼 Set Force Pic", callback_data="adm_fsub_pic"),
+         InlineKeyboardButton("🗑 Remove Pic", callback_data="adm_fsub_pic_rm")],
+        [InlineKeyboardButton("« Back", callback_data="adm_menu")],
     ]
     markup = InlineKeyboardMarkup(buttons)
     if edit:
@@ -384,9 +384,9 @@ async def render_admins_menu(query, edit=True):
         f"<b>Extra admins added:</b> {len(admins)}"
     )
     buttons = [
-        [InlineKeyboardButton("➕ ᴀᴅᴅ ᴀᴅᴍɪɴ", callback_data="adm_admins_add")],
-        [InlineKeyboardButton("📋 ᴍᴀɴᴀɢᴇ ᴀᴅᴍɪɴꜱ", callback_data="adm_admins_list")],
-        [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
+        [InlineKeyboardButton("➕ Add Admin", callback_data="adm_admins_add")],
+        [InlineKeyboardButton("📋 Manage Admins", callback_data="adm_admins_list")],
+        [InlineKeyboardButton("« Back", callback_data="adm_menu")],
     ]
     markup = InlineKeyboardMarkup(buttons)
     if edit:
@@ -403,6 +403,6 @@ async def render_admin_detail(query, target_id):
     for perm, label in PERMISSIONS.items():
         state = "✅" if adm.get(perm) else "❌"
         buttons.append([InlineKeyboardButton(f"{state} {label}", callback_data=f"adm_admin_toggle_{perm}_{target_id}")])
-    buttons.append([InlineKeyboardButton("🗑 ʀᴇᴍᴏᴠᴇ ᴀᴅᴍɪɴ", callback_data=f"adm_admin_remove_{target_id}")])
-    buttons.append([InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_admins_list")])
+    buttons.append([InlineKeyboardButton("🗑 Remove Admin", callback_data=f"adm_admin_remove_{target_id}")])
+    buttons.append([InlineKeyboardButton("« Back", callback_data="adm_admins_list")])
     await _edit(query.message, text, reply_markup=InlineKeyboardMarkup(buttons))
