@@ -225,11 +225,9 @@ async def change_method(bot, query):
 
 def _preview_text(state):
     return bold(
-        "👆 LINK CHANGE PREVIEW !!\n\n"
-        "🌐 Domain Link: Same\n"
-        "🔗 Shortener: Same\n\n"
-        f"📦 Old Content: {html.escape(state['old']['label'])}\n"
-        f"📦 New Content: {html.escape(state['new']['label'])}"
+        "🔄 Change Link\n\n"
+        f"Old: {html.escape(state['old']['label'])}\n"
+        f"New: {html.escape(state['new']['label'])}"
     )
 
 
@@ -516,20 +514,11 @@ async def _link_in_use(param):
 
 
 def _delete_text(state):
-    label = state["old"]["label"]
-    lines = [
-        "🗑 DELETE THIS BOT LINK?", "",
-        f"Content: {html.escape(label)}",
-        "Status: Not Used By Any Domain Link", "",
-        "This Will Remove:",
-        "• The Saved Batch List In The Log Channel (The Files Stay)" if label.startswith("Batch")
-        else "• The Saved Content In The Log Channel",
-        "• Its Links Post Right Under It",
-        "• So This Bot Link Stops Working", "",
-        "Domain Links And Short Links Are Not Touched.",
-        "Make Sure No Short Link Still Uses This Bot Link.",
-    ]
-    return bold("\n".join(lines)) + "\n\n" + bold("Bot Link:") + f"\n<code>{html.escape(state['dlink'])}</code>"
+    return bold(
+        "🗑 Delete This Bot Link?\n\n"
+        f"Content: {html.escape(state['old']['label'])}\n"
+        "Not Used By Any Domain Link"
+    )
 
 
 def _delete_markup():
@@ -556,9 +545,7 @@ async def delete_confirm(bot, query):
     await _show(state, bold("⏳ Deleting The Bot Link..."))
     try:
         removed = await _delete_saved(bot, state["old"]["log_id"])
-        result = bold("✅ BOT LINK DELETED !!\n\n📦 Log Channel Content: Removed\n"
-                      + ("📎 Links Post: Removed\n" if removed > 1 else "")
-                      + "🔗 Bot Link: Stopped")
+        result = bold("✅ Bot Link Deleted !!")
     except Exception as e:
         print(f"DELETE LINK LOG ERROR: {type(e).__name__}: {e}")
         result = bold("❌ Could Not Delete The Saved Content.\nNothing Was Changed.")
@@ -635,20 +622,21 @@ async def change_confirm(bot, query):
         await _show(state, bold("⏳ Updating Arolinks..."))
         auto, why = await arolinks_edit.set_destination(alias, new["share"])
 
+    done = (bold("✅ Link Changed !!\n\n")
+            + f"<code>{html.escape(doc['permanent_url'])}</code>\n"
+            + bold(f"→ {new['label']}"))
     if auto:
-        text = bold(
-            "✅ BOT LINK CHANGED !!\n\n"
-            "✅ Arolinks Updated Automatically\n\n"
-            "Short Link:"
-        ) + f"\n<code>{html.escape(short_url)}</code>"
+        text = done
     else:
-        head = "✅ BOT LINK CHANGED !!\n\n"
+        # The short link could not be edited by the bot: show what to edit by hand.
+        head = ""
         if alias and arolinks_edit.configured():
-            head += f"⚠️ Arolinks Not Updated: {html.escape(why)}\n\n"
+            head = f"⚠️ Arolinks Not Updated: {html.escape(why)}\n\n"
+        text = done + "\n\n"
         if short_url:
-            text = bold(head + "Edit This In Arolinks:\n\nShort Link:") + f"\n<code>{html.escape(short_url)}</code>\n\n"
+            text += bold(head + "Edit This In Arolinks:") + f"\n<code>{html.escape(short_url)}</code>\n\n"
         else:
-            text = bold(head + "Edit The Short Link In Arolinks.") + "\n\n"
+            text += bold(head + "Edit The Short Link In Arolinks.") + "\n\n"
         text += bold("Set The New URL To:") + f"\n<code>{html.escape(new['share'])}</code>"
 
     old_id = state["old"]["log_id"]
@@ -694,15 +682,13 @@ async def delete_old_ask(bot, query):
         return await query.answer("Expired.", show_alert=True)
     token = query.data.split(":", 1)[1]
     if job["label"].startswith("Batch"):
-        what = ("The Old Batch List And Its Links Post Will Be Removed, So The Old Bot Link Stops Working. "
-                "The Files Stay In The Log Channel.")
+        what = "Old Batch List And Its Links Post\n(The Files Stay)"
     else:
-        what = ("It And Its Links Post Will Be Removed From The Log Channel, "
-                "And The Old Bot Link Will Stop Working.")
+        what = f"{html.escape(job['label'])} And Its Links Post"
     await query.answer()
     await _edit(
         query,
-        job["text"] + "\n\n" + bold(f"⚠️ DELETE OLD CONTENT?\n\nOld: {html.escape(job['label'])}\n{what}"),
+        bold(f"🗑 Delete Old Content?\n\n{what}"),
         InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Delete", callback_data=f"lnk_dely:{token}"),
                                InlineKeyboardButton("↩️ Back", callback_data=f"lnk_back:{token}")]]),
     )
@@ -717,9 +703,7 @@ async def keep_old_ask(bot, query):
     await query.answer()
     await _edit(
         query,
-        job["text"] + "\n\n" + bold(
-            f"KEEP OLD CONTENT?\n\nOld: {html.escape(job['label'])}\n"
-            "It Stays In The Log Channel And The Old Bot Link Keeps Working."),
+        bold(f"✅ Keep Old Content?\n\n{html.escape(job['label'])}\nIts Old Bot Link Keeps Working"),
         InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Keep", callback_data=f"lnk_keepy:{token}"),
                                InlineKeyboardButton("↩️ Back", callback_data=f"lnk_back:{token}")]]),
     )
@@ -747,7 +731,7 @@ async def delete_old(bot, query):
         return await _edit(query, job["text"], _choice_markup(token))
     _DONE.pop(token, None)
     await query.answer("Old content deleted.", show_alert=True)
-    await _edit(query, job["text"] + "\n\n" + bold("🗑 Old Content Deleted."), _close_markup())
+    await _edit(query, bold("✅ Old Content Deleted !!"), _close_markup())
 
 
 @Client.on_callback_query(filters.regex(r"^lnk_keepy:[0-9a-f]{8}$") & owner_only)
@@ -757,7 +741,7 @@ async def keep_old(bot, query):
         return await query.answer("Expired.", show_alert=True)
     _DONE.pop(query.data.split(":", 1)[1], None)
     await query.answer("Old content kept.")
-    await _edit(query, job["text"] + "\n\n" + bold("✅ Old Content Kept."), _close_markup())
+    await _edit(query, bold("✅ Old Content Kept !!"), _close_markup())
 
 
 @Client.on_callback_query(filters.regex(r"^lnk_close$") & owner_only)
