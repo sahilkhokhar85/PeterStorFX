@@ -84,11 +84,11 @@ def stream_download_buttons(chat_id, message_id, media, user_id):
 
         return [[
             InlineKeyboardButton(
-                '🚀 ꜰᴀsᴛ ᴅᴏᴡɴʟᴏᴀᴅ',
+                '🚀 Fast Download',
                 url=download_url
             ),
             InlineKeyboardButton(
-                '🖥 ᴡᴀᴛᴄʜ ᴏɴʟɪɴᴇ',
+                '🖥 Watch Online',
                 url=watch_url
             ),
         ]]
@@ -250,7 +250,7 @@ async def start(client, message):
     if missing_channels:
         buttons = fsub_buttons
         param = message.command[1] if len(message.command) == 2 else "-"
-        buttons.append([InlineKeyboardButton("🔄 ᴛʀʏ ᴀɢᴀɪɴ", callback_data=f"fsub_verify:{param}")])
+        buttons.append([InlineKeyboardButton("🔄 Try Again", callback_data=f"fsub_verify:{param}")])
         fsub_text = settings.get("force_sub_message") or "<b>Please join our channel(s) to use this bot.</b>"
         fsub_photo = settings.get("force_sub_photo")
         if fsub_photo:
@@ -270,11 +270,11 @@ async def start(client, message):
 
     if len(message.command) != 2:
         buttons = [[
-            InlineKeyboardButton('👨‍💻 ᴍᴀɪɴᴛᴀɪɴᴇʀ', url='https://t.me/RudraBlaze'),
-            InlineKeyboardButton('📢 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url='https://t.me/ChillFlizX')
+            InlineKeyboardButton('👨‍💻 Maintainer', url='https://t.me/RudraBlaze'),
+            InlineKeyboardButton('📢 Update Channel', url='https://t.me/ChillFlizX')
             ],[
-            InlineKeyboardButton('💁‍♂️ ʜᴇʟᴘ', callback_data='help'),
-            InlineKeyboardButton('💎 ᴀʙᴏᴜᴛ', callback_data='about')
+            InlineKeyboardButton('💁‍♂️ Help', callback_data='help'),
+            InlineKeyboardButton('💎 About', callback_data='about')
         ]]
         reply_markup = InlineKeyboardMarkup(buttons)
         me = client.me
@@ -782,8 +782,8 @@ async def cb_handler(client: Client, query: CallbackQuery):
         await query.message.delete()
     elif query.data == "about":
         buttons = [[
-            InlineKeyboardButton('Hᴏᴍᴇ', callback_data='start'),
-            InlineKeyboardButton('🔒 Cʟᴏsᴇ', callback_data='close_data')
+            InlineKeyboardButton('Home', callback_data='start'),
+            InlineKeyboardButton('🔒 Close', callback_data='close_data')
         ]]
         await client.edit_message_media(
             query.message.chat.id, 
@@ -801,11 +801,11 @@ async def cb_handler(client: Client, query: CallbackQuery):
     
     elif query.data == "start":
         buttons = [[
-            InlineKeyboardButton('👨‍💻 ᴍᴀɪɴᴛᴀɪɴᴇʀ', url='https://t.me/RudraBlaze'),
-            InlineKeyboardButton('📢 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url='https://t.me/ChillFlizX')
+            InlineKeyboardButton('👨‍💻 Maintainer', url='https://t.me/RudraBlaze'),
+            InlineKeyboardButton('📢 Update Channel', url='https://t.me/ChillFlizX')
             ],[
-            InlineKeyboardButton('💁‍♂️ ʜᴇʟᴘ', callback_data='help'),
-            InlineKeyboardButton('💎 ᴀʙᴏᴜᴛ', callback_data='about')
+            InlineKeyboardButton('💁‍♂️ Help', callback_data='help'),
+            InlineKeyboardButton('💎 About', callback_data='about')
         ]]
         reply_markup = InlineKeyboardMarkup(buttons)
         await client.edit_message_media(
@@ -823,8 +823,8 @@ async def cb_handler(client: Client, query: CallbackQuery):
     
     elif query.data == "help":
         buttons = [[
-            InlineKeyboardButton('Hᴏᴍᴇ', callback_data='start'),
-            InlineKeyboardButton('🔒 Cʟᴏsᴇ', callback_data='close_data')
+            InlineKeyboardButton('Home', callback_data='start'),
+            InlineKeyboardButton('🔒 Close', callback_data='close_data')
         ]]
         await client.edit_message_media(
             query.message.chat.id, 
