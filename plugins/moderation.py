@@ -219,7 +219,31 @@ async def do_restart(chat_id_notify=None, client=None):
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
+RESTART_CONFIRM_TEXT = "<b>♻️ Restart The Bot?\n\nIt Will Be Offline For A Few Seconds.</b>"
+RESTART_CONFIRM_SECONDS = 120   # an old confirm message must not restart the bot later
+
+
 @Client.on_message(filters.command("restart") & dynamic_admin_filter())
 async def restart_bot_cmd(client, message: Message):
-    await message.reply_text("<b>♻️ Restarting bot, please wait...</b>")
+    # Ask first: a restart only happens after the Yes button.
+    await message.reply_text(
+        RESTART_CONFIRM_TEXT,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Yes, Restart", callback_data=f"rst_yes:{int(time.time())}"),
+            InlineKeyboardButton("❌ Cancel", callback_data=f"rst_no:{int(time.time())}"),
+        ]]),
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^rst_(yes|no):\d+$") & dynamic_admin_filter())
+async def restart_confirm_cb(client, query):
+    answer, _, stamp = query.data.partition(":")
+    if answer == "rst_no":
+        await query.answer("Cancelled.")
+        return await query.message.edit_text("<b>Cancelled.</b>")
+    if time.time() - int(stamp) > RESTART_CONFIRM_SECONDS:
+        await query.answer("Expired. Send /restart again.", show_alert=True)
+        return await query.message.edit_text("<b>Expired. Send /restart Again.</b>")
+    await query.answer("Restarting...")
+    await query.message.edit_text("<b>♻️ Restarting bot, please wait...</b>")
     os.execv(sys.executable, [sys.executable] + sys.argv)
