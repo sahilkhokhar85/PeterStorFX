@@ -276,7 +276,7 @@ async def fsub_verify_callback(client: Client, callback_query):
     await callback_query.answer("✅ Verified! Tap Continue below.", show_alert=True)
     username = client.me.username
     open_url = f"https://t.me/{username}?start={param}" if param and param != "-" else f"https://t.me/{username}?start=true"
-    success_text = "✅ <b>Access granted!</b> Tap the button below to continue."
+    success_text = "<b>✅ Access Granted !!\n\n👇 Tap Continue To Get Your Content.</b>"
     try:
         if callback_query.message.photo:
             await callback_query.message.edit_caption(success_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("▶️ Continue", url=open_url)]]))
