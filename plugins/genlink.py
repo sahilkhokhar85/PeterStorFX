@@ -40,6 +40,19 @@ PERMANENT_LINK_WORKER_URL = os.getenv("PERMANENT_LINK_WORKER_URL")
 PERMANENT_LINK_ADMIN_KEY = os.getenv("PERMANENT_LINK_ADMIN_KEY")
 
 links_col = db.db["permanent_links"]
+unused_col = db.db["unused_bot_links"]   # bot links made with "Bot Link Only" (and old ones kept) that no domain link uses
+
+
+async def remember_unused(param, label, log_id):
+    """Never breaks link generation: a failed save only means the link is missing from the list."""
+    try:
+        await unused_col.update_one(
+            {"_id": param},
+            {"$set": {"label": label[:80], "log_id": log_id, "created_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+    except Exception as e:
+        print(f"UNUSED RECORD ERROR: {type(e).__name__}: {e}")
 
 # Fetch large ranges in chunks to reduce Telegram API requests.
 BATCH_FETCH_SIZE = 200
@@ -330,8 +343,11 @@ async def build_link_reply(source_message, bot=None, admin=None, bot_only=False)
             post = await copy_keep_cover(source_message, LOG_CHANNEL)
             share_link = make_file_share_link(post.id)
             stored_id = post.id
-        if bot and stored_id:
+        if stored_id:
             name, size = _file_info(source_message)
+            kind = "File" if getattr(source_message, "media", None) else "Message"
+            await remember_unused(encode_start(f"file_{stored_id}"), f"1 {kind} ({name})", stored_id)
+        if bot and stored_id:
             await post_links_to_log(
                 bot, stored_id, admin,
                 [
@@ -992,9 +1008,11 @@ async def _finish_manual_batch(bot, admin_id, state, outlist, failed):
         if os.path.exists(filename):
             os.remove(filename)
 
-    share_link = f"{WEBSITE_URL.rstrip('/')}?start=BATCH-{encode_start(str(post.id))}"
+    encoded_post = encode_start(str(post.id))
+    share_link = f"{WEBSITE_URL.rstrip('/')}?start=BATCH-{encoded_post}"
     if state.get("bot_only"):
-        permanent_link = None   # Bot Link Only: no domain link, no shortener, nothing saved
+        permanent_link = None   # Bot Link Only: no domain link, no shortener
+        await remember_unused(f"BATCH-{encoded_post}", f"Batch ({len(outlist)} Files)", post.id)
     else:
         permanent_link, share_link = await get_or_create_link(f"batch:manual:{post.id}", share_link)
     note = f"⚠️ Skipped: {_plural(failed, 'Message')}" if failed else ""
@@ -1195,7 +1213,8 @@ async def _range_batch(bot, message, user):
         )
 
         if bot_only:
-            permanent_link = None   # Bot Link Only: no domain link, no shortener, nothing saved
+            permanent_link = None   # Bot Link Only: no domain link, no shortener
+            await remember_unused(f"BATCH-{encoded}", f"Batch ({len(outlist)} Files)", post.id)
         else:
             permanent_link, share_link = await get_or_create_link(
                 batch_cache_key,
