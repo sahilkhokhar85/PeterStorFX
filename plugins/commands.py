@@ -25,6 +25,17 @@ logger = logging.getLogger(__name__)
 
 BATCH_FILES = {}
 
+EMPTY_LINK_TEXT = (
+    "<b>⚠️ This Link Is Empty Or Expired.\n\n"
+    "The Content Is No Longer Available.\n"
+    "Please Ask For A New Link.\n\n"
+    "Help & Support >>> @ChillFlizOwnerBot</b>"
+)
+
+
+def _is_empty(msg):
+    return (not msg) or bool(getattr(msg, "empty", False))
+
 
 def get_size(size):
     """Get size in readable format"""
@@ -302,6 +313,9 @@ async def start(client, message):
         if not msgs:
             decode_file_id = base64.urlsafe_b64decode(file_id + "=" * (-len(file_id) % 4)).decode("ascii")
             msg = await client.get_messages(LOG_CHANNEL, int(decode_file_id))
+            if _is_empty(msg):
+                await sts.delete()
+                return await message.reply_text(EMPTY_LINK_TEXT)
             # Sticker: copy directly without Stream/Download buttons
             if msg.sticker:
                 try:
@@ -528,6 +542,10 @@ async def start(client, message):
             titles.append(title)
             report_items.append((info, rep_caption, reply_markup))
             await asyncio.sleep(0.1)
+        if not filesarr:
+            # every message of this batch is gone (or none could be sent): say so, no timer message
+            await sts.delete()
+            return await message.reply_text(EMPTY_LINK_TEXT)
         try:
             accessed = _kinds_summary([_kind_of(it[0]) for it in report_items]) or "N/A"
             queue_report(
@@ -564,6 +582,8 @@ async def start(client, message):
         return await message.reply_text("<b>❌ This link is invalid or broken.</b>")
     try:
         msg = await client.get_messages(LOG_CHANNEL, int(decode_file_id))
+        if _is_empty(msg):
+            return await message.reply_text(EMPTY_LINK_TEXT)
         rep_caption = None   # what the report copy gets: same caption and buttons as the user's
         rep_markup = None
 
