@@ -20,9 +20,9 @@ DEFAULTS = {
     "force_sub": False,
     "force_sub_channels": [],          # list of channel ids or @usernames
     "force_sub_message": (
-        "🔴 <b>ᴘʟᴇᴀꜱᴇ ᴊᴏɪɴ ᴍʏ ᴜᴘᴅᴀᴛᴇꜱ ᴄʜᴀɴɴᴇʟ ᴛᴏ ᴜꜱᴇ ᴛʜɪꜱ ʙᴏᴛ!</b> 🔴\n"
+        "🔴 <b>Please Join My Updates Channel To Use This Bot!</b> 🔴\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
-        "🎬 <b>ʟᴀᴛᴇꜱᴛ ᴍᴏᴠɪᴇꜱ | ᴛᴠ ꜱʜᴏᴡꜱ | ᴡᴇʙ ꜱᴇʀɪᴇꜱ ᴘᴀᴀɴᴇ ᴋᴇ ʟɪʏᴇ</b>\n"
+        "🎬 <b>Latest Movies | TV Shows | Web Series Paane Ke Liye</b>\n"
         "👉 <i>Please join all our upcoming channels first.</i>\n\n"
         "⚠️ <b>Channels join karne ke baad hi aap bot use kar sakte hain.</b>\n"
         "🔄 <i>Join karne ke baad \"Try Again\" par click karein aur episode mil jayenge.</i> ✅"
