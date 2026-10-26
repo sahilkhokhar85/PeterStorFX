@@ -14,6 +14,8 @@ _client = motor.motor_asyncio.AsyncIOMotorClient(
 _db = _client[DB_NAME]
 _col = _db.bot_settings
 _join_requests_col = _db.join_requests
+_force_join_log_col = _db.force_join_log
+_force_join_log_ready = False
 
 DEFAULTS = {
     "_id": "settings",
@@ -200,3 +202,20 @@ async def clear_join_request(user_id, channel_id):
     """Wipe the recorded join request when a user leaves/is kicked from the
     channel, so they're required to request again next time."""
     await _join_requests_col.delete_one({"user_id": int(user_id), "channel_id": int(channel_id)})
+
+
+async def claim_force_join_log(key):
+    """True for the FIRST bot that claims this join/leave event (every bot sees the same event,
+    only one may write the log). Old claims expire after a week."""
+    global _force_join_log_ready
+    from pymongo.errors import DuplicateKeyError
+    try:
+        if not _force_join_log_ready:
+            await _force_join_log_col.create_index("at", expireAfterSeconds=7 * 24 * 3600)
+            _force_join_log_ready = True
+        await _force_join_log_col.insert_one({"_id": key, "at": datetime.datetime.utcnow()})
+        return True
+    except DuplicateKeyError:
+        return False
+    except Exception:
+        return False
