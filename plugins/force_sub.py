@@ -199,7 +199,7 @@ async def _channel_status(client: Client, entry, user_id: int, index: int = 1):
 
     # Deliberately show a generic "Join Channel N" label instead of the
     # real channel name/title on the button - matches the requested design.
-    row = [InlineKeyboardButton(f"🔔 ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ {index}", url=link)] if link else None
+    row = [InlineKeyboardButton(f"🔔 Join Channel {index}", url=link)] if link else None
     return entry, row
 
 
@@ -263,7 +263,7 @@ async def fsub_verify_callback(client: Client, callback_query):
             f"❌ Still {len(missing)} channel(s) pending! Join/request all of them, then try again.",
             show_alert=True,
         )
-        buttons = buttons + [[InlineKeyboardButton("🔄 ᴛʀʏ ᴀɢᴀɪɴ", callback_data=f"fsub_verify:{param}")]]
+        buttons = buttons + [[InlineKeyboardButton("🔄 Try Again", callback_data=f"fsub_verify:{param}")]]
         try:
             if callback_query.message.photo:
                 await callback_query.message.edit_caption(callback_query.message.caption.html, reply_markup=InlineKeyboardMarkup(buttons))
