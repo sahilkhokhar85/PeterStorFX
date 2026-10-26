@@ -108,6 +108,9 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("✏️ ᴄʜᴀɴɢᴇ ʟɪɴᴋ", callback_data="lnk_change"),
                  InlineKeyboardButton("🗑 ᴅᴇʟᴇᴛᴇ ʟɪɴᴋ", callback_data="lnk_delete")],
+                [InlineKeyboardButton("📭 ᴇᴍᴘᴛʏ ʟɪɴᴋꜱ", callback_data="lnk_empty"),
+                 InlineKeyboardButton("🤖 ᴜɴᴜꜱᴇᴅ ʙᴏᴛ ʟɪɴᴋꜱ", callback_data="lnk_unused")],
+                [InlineKeyboardButton("🧹 ꜰʀᴇᴇ ᴀ ʟɪɴᴋ", callback_data="lnk_free")],
                 [InlineKeyboardButton("« ʙᴀᴄᴋ", callback_data="adm_menu")],
             ]),
         )
