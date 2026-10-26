@@ -12,11 +12,14 @@
 #      an actual channel member before this feature was even turned on).
 
 import asyncio
+import html
 import logging
 import datetime
 from pyrogram import Client, filters, enums
-from pyrogram.errors import UserNotParticipant
+from pyrogram.errors import UserNotParticipant, FloodWait
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from config import REPORT_CHANNEL
+from plugins.settings_db import claim_force_join_log
 from plugins.settings_db import (
     get_settings, force_sub_channel_id, force_sub_channel_mode,
     force_sub_channel_link, set_force_sub_link,
@@ -36,6 +39,85 @@ _verify_semaphore = asyncio.Semaphore(8)
 # quietly *declined* (Telegram sends no event at all for a plain decline,
 # unlike ban/kick which we already detect via handle_member_left below).
 JOIN_REQUEST_TTL_DAYS = 3
+
+# ---------------------------------------------------------------------------
+# Join / leave log (REPORT_CHANNEL)
+# ---------------------------------------------------------------------------
+# One message when a real user joins (or sends a join request to) / leaves a force-sub channel.
+# All bots are admins of the channel, so every bot gets the same event: the first bot to claim it
+# in MongoDB writes the log, the others skip it. Bots are never logged. The report channel
+# normally signs each message with the bot's name; that is turned off here because the logging
+# bot is arbitrary.
+try:
+    from Peter.bot import NO_SIGN
+except ImportError:
+    from contextvars import ContextVar
+    NO_SIGN = ContextVar("NO_SIGN", default=False)
+
+FJ_LOG_GAP = 0.7            # seconds between two log messages (a rush of joins must not flood Telegram)
+_FJ_QUEUE = None
+_FJ_WORKER = None
+
+
+def _fj_text(kind, user, chat):
+    head = {
+        "join": "➕ User Joined A Force Join Channel",
+        "request": "➕ User Requested To Join A Force Join Channel",
+        "left": "➖ User Left A Force Join Channel",
+    }[kind]
+    name = " ".join(x for x in (getattr(user, "first_name", None), getattr(user, "last_name", None)) if x) or "User"
+    lines = [
+        f"<b>{head}</b>", "",
+        f"<b>👤 Name:</b> {html.escape(name)}",
+        f"<b>🆔 ID:</b> <code>{user.id}</code>",
+    ]
+    if getattr(user, "username", None):
+        lines.append(f"<b>🔗 Username:</b> @{html.escape(user.username)}")
+    lines += ["", f"<b>📢 Channel:</b> {html.escape(getattr(chat, 'title', None) or str(chat.id))}"]
+    return "\n".join(lines)
+
+
+async def _fj_worker():
+    while True:
+        client, text = await _FJ_QUEUE.get()
+        try:
+            for _ in range(3):
+                tok = NO_SIGN.set(True)
+                try:
+                    await client.send_message(REPORT_CHANNEL, text, disable_web_page_preview=True)
+                    break
+                except FloodWait as e:
+                    await asyncio.sleep(int(e.value) + 1)
+                except Exception as e:
+                    logger.warning(f"[FSUB] couldn't send the join/leave log: {type(e).__name__}: {e}")
+                    break
+                finally:
+                    NO_SIGN.reset(tok)
+        finally:
+            _FJ_QUEUE.task_done()
+        await asyncio.sleep(FJ_LOG_GAP)
+
+
+async def log_force_join(client, kind, user, chat, when=None):
+    """kind: "join" | "request" | "left". Never raises."""
+    global _FJ_QUEUE, _FJ_WORKER
+    try:
+        if getattr(user, "is_bot", False):
+            return
+        stamp = when.timestamp() if hasattr(when, "timestamp") else int(datetime.datetime.utcnow().timestamp() // 10)
+        if not await claim_force_join_log(f"{kind}:{user.id}:{chat.id}:{stamp}"):
+            return        # another bot already logs this event
+        if _FJ_QUEUE is None:
+            _FJ_QUEUE = asyncio.Queue()
+        _FJ_QUEUE.put_nowait((client, _fj_text(kind, user, chat)))
+        if _FJ_WORKER is None or _FJ_WORKER.done():
+            _FJ_WORKER = asyncio.create_task(_fj_worker())
+    except Exception as e:
+        logger.warning(f"[FSUB] join/leave log failed: {type(e).__name__}: {e}")
+
+
+def _registered(entries, chat_id):
+    return any(force_sub_channel_id(entry) == chat_id for entry in entries)
 
 
 @Client.on_chat_join_request()
@@ -60,6 +142,7 @@ async def track_join_request(client: Client, update):
     except Exception as e:
         logger.error(f"[FSUB] Couldn't save join request for {update.from_user.id} in {update.chat.id}: {e}")
         return
+    await log_force_join(client, "request", update.from_user, update.chat, getattr(update, "date", None))
 
     try:
         await client.send_message(
@@ -87,7 +170,9 @@ async def handle_member_left(client: Client, update):
     # "new is None" itself has to count as a leave, on top of the normal
     # LEFT/BANNED status check.
     left_or_banned = new is None or new.status in (enums.ChatMemberStatus.LEFT, enums.ChatMemberStatus.BANNED)
-    if not left_or_banned:
+    joined = (new is not None and new.status == enums.ChatMemberStatus.MEMBER
+              and (old is None or old.status in (enums.ChatMemberStatus.LEFT, enums.ChatMemberStatus.BANNED)))
+    if not (left_or_banned or joined):
         return
 
     user = (new.user if new else None) or (old.user if old else None)
@@ -97,6 +182,11 @@ async def handle_member_left(client: Client, update):
 
     settings = await get_settings()
     entries = settings.get("force_sub_channels") or []
+    if _registered(entries, update.chat.id):
+        await log_force_join(client, "join" if joined else "left", user, update.chat, getattr(update, "date", None))
+    if joined:
+        return
+
     matched = any(
         isinstance(entry, dict) and entry.get("mode") == "request" and force_sub_channel_id(entry) == update.chat.id
         for entry in entries
@@ -273,7 +363,7 @@ async def fsub_verify_callback(client: Client, callback_query):
             pass
         return
 
-    await callback_query.answer("✅ Verified! Tap Continue Below.", show_alert=True)
+    await callback_query.answer("✅ Verified! Tap Continue below.", show_alert=True)
     username = client.me.username
     open_url = f"https://t.me/{username}?start={param}" if param and param != "-" else f"https://t.me/{username}?start=true"
     success_text = "<b>✅ Access Granted !!\n\n👇 Tap Continue To Get Your Content.</b>"
