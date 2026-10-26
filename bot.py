@@ -83,6 +83,16 @@ async def start():
         logging.warning(f"Couldn't send the restart message to REPORT_CHANNEL: {type(e).__name__}: {e}")
     print("Bot Started Successfully!")
     await idle()
+    # idle() returns on SIGTERM / SIGINT (docker stop / down / restart, server shutdown)
+    try:
+        await asyncio.wait_for(
+            StreamBot.send_message(chat_id=REPORT_CHANNEL, text="<b>🛑 Bot Stopped</b>"), timeout=5)
+    except Exception as e:
+        logging.warning(f"Couldn't send the stopped message to REPORT_CHANNEL: {type(e).__name__}: {e}")
+    try:
+        await asyncio.wait_for(StreamBot.stop(), timeout=3)
+    except Exception:
+        pass
 
 
 if __name__ == '__main__':
