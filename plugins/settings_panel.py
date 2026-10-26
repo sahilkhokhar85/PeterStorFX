@@ -84,7 +84,7 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
 
     # Restart and admin management need the "Can Manage Admins" permission
     # (the owners listed in ADMINS always have it).
-    if data == "adm_restart" or data.startswith("adm_admin"):
+    if data.startswith("adm_restart") or data.startswith("adm_admin"):
         if not (user.id in ADMINS or await has_permission(user.id, "can_manage_admins")):
             return await query.answer("You don't have permission for this.", show_alert=True)
 
@@ -138,6 +138,17 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
 
     # ---------------- Restart Bot ----------------
     elif data == "adm_restart":
+        # Ask first: the restart only happens after the Yes button.
+        await _edit(
+            query.message,
+            "<b>♻️ Restart The Bot?\n\nIt Will Be Offline For A Few Seconds.</b>",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Yes, Restart", callback_data="adm_restart_yes"),
+                InlineKeyboardButton("↩️ Back", callback_data="adm_menu"),
+            ]]),
+        )
+
+    elif data == "adm_restart_yes":
         await _edit(query.message, "<b>♻️ Restarting bot, please wait...</b>")
         import os, sys
         os.execv(sys.executable, [sys.executable] + sys.argv)
