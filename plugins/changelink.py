@@ -38,11 +38,13 @@ from plugins.genlink import (
     bold, encode_start, make_file_share_link, get_message_cache_key,
     get_media_unique_id, _extract_batch_ref, fetch_batch_messages,
     copy_batch_to_log, _file_info, _human_size, post_links_to_log,
-    method_markup, start_manual,
+    method_markup, start_manual, unused_col,
 )
 
 IDLE_SECONDS = 600
 
+LIST_PAGE = 8
+_LISTS = {}  # owner id -> {"kind": "empty"|"unused", "items": [...], "t": time}
 _FLOW = {}   # owner id -> {"step", "t", "prompt", "doc", "old", "new"}
 _DONE = {}   # token -> {"admin", "old_log_id", "label", "text"}  (what "Delete Old" removes)
 
@@ -132,6 +134,61 @@ async def _delete_saved(bot, content_id):
         print(f"LINKS POST LOOKUP ERROR: {type(e).__name__}: {e}")
     await bot.delete_messages(LOG_CHANNEL, ids)
     return len(ids)
+
+
+def _choose_view(label):
+    return (
+        bold(f"✅ Link Found\n\nCurrently Gives: {html.escape(label)}\n\nWhat Is The New Content?"),
+        InlineKeyboardMarkup([
+            [InlineKeyboardButton("📄 Single Message", callback_data="lnk_pick:file"),
+             InlineKeyboardButton("📦 Batch", callback_data="lnk_pick:batch")],
+            [InlineKeyboardButton("🔗 Existing Bot Link", callback_data="lnk_pick:existing")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="lnk_cancel")],
+        ]),
+    )
+
+
+async def _domain_doc(text):
+    """(saved link doc, key) for a pasted domain link, or (None, None)."""
+    m = re.search(r"https?://[^\s/]+/([A-Za-z0-9_-]+)/?\s*$", text or "")
+    if not m:
+        return None, None
+    key = m.group(1)
+    doc = await links_col.find_one({"permanent_url": {"$regex": f"/{re.escape(key)}/?$"}})
+    return (doc, key) if doc else (None, None)
+
+
+async def _exists(bot, log_id):
+    try:
+        saved = await bot.get_messages(LOG_CHANNEL, log_id)
+    except Exception:
+        return False
+    return bool(saved) and not getattr(saved, "empty", False)
+
+
+async def _existing_new(bot, state, link_text):
+    """Checks an existing bot link and, if it can be used for this domain link, sets state["new"].
+    Returns an error message (HTML) or None."""
+    param = _start_param(link_text)
+    if not param:
+        return bold("❌ Send A Valid Bot Link.")
+    if param == _start_param(state["doc"].get("share_link")):
+        return bold("❌ This Bot Link Is Already Active On This Domain Link.")
+    user_doc = await _link_in_use(param)
+    if user_doc:
+        return (bold("❌ This Bot Link Is Already Used By:\n\n")
+                + f"<code>{html.escape(user_doc.get('permanent_url') or '-')}</code>")
+    label, log_id = await _describe_old(bot, link_text)
+    if not log_id or not await _exists(bot, log_id):
+        return bold("❌ Nothing Is Saved For This Bot Link (Deleted Or Not Valid).")
+    state["new"] = {
+        "share": f"{WEBSITE_URL.rstrip('/')}?start={param}",
+        "label": label,
+        "cache_key": f"existing:{param}",
+        "post_id": log_id,
+        "info": [f"<b>🔗 Existing Bot Link:</b> <code>{html.escape(label)}</code>"],
+    }
+    return None
 
 
 # ---------------- opening the flow ----------------
@@ -303,52 +360,43 @@ async def collect(bot, message):
         label, old_id = await _describe_old(bot, doc.get("share_link"))
         state.update(step="choose", doc=doc, key=key,
                      old={"label": label, "log_id": old_id})
-        await _show(
-            state,
-            bold(f"✅ Link Found\n\nCurrently Gives: {html.escape(label)}\n\nWhat Is The New Content?"),
-            InlineKeyboardMarkup([
-                [InlineKeyboardButton("📄 Single Message", callback_data="lnk_pick:file"),
-                 InlineKeyboardButton("📦 Batch", callback_data="lnk_pick:batch")],
-                [InlineKeyboardButton("🔗 Existing Bot Link", callback_data="lnk_pick:existing")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="lnk_cancel")],
-            ]),
-        )
+        text_, markup_ = _choose_view(label)
+        await _show(state, text_, markup_)
+        return message.stop_propagation()
+
+    if step == "attach_domain":
+        doc, key = await _domain_doc(text)
+        if not doc:
+            await message.reply_text(bold("❌ Send A Valid Domain Link That Is In The Database."))
+            return message.stop_propagation()
+        label, old_id = await _describe_old(bot, doc.get("share_link"))
+        state.update(doc=doc, key=key, old={"label": label, "log_id": old_id})
+        err = await _existing_new(bot, state, state["preset"])
+        if err:
+            await message.reply_text(err)
+            return message.stop_propagation()
+        state["step"] = "preview"
+        await _show(state, _preview_text(state), _confirm_markup())
+        return message.stop_propagation()
+
+    if step == "free_link":
+        doc, key = await _domain_doc(text)
+        if not doc:
+            await message.reply_text(bold("❌ Send A Valid Domain Link That Is In The Database."))
+            return message.stop_propagation()
+        label, log_id = await _describe_old(bot, doc.get("share_link"))
+        if not log_id or not await _exists(bot, log_id):
+            await message.reply_text(bold("❌ This Link Is Already Empty."))
+            return message.stop_propagation()
+        state.update(step="fconfirm", doc=doc, key=key, old={"label": label, "log_id": log_id})
+        await _show(state, _free_text(state), _free_markup())
         return message.stop_propagation()
 
     if step == "existing":
-        param = _start_param(text)
-        if not param:
-            await message.reply_text(bold("❌ Send A Valid Bot Link."))
+        err = await _existing_new(bot, state, text)
+        if err:
+            await message.reply_text(err)
             return message.stop_propagation()
-        current = _start_param(state["doc"].get("share_link"))
-        if param == current:
-            await message.reply_text(bold("❌ This Bot Link Is Already Active On This Domain Link."))
-            return message.stop_propagation()
-        user_doc = await _link_in_use(param)
-        if user_doc:
-            await message.reply_text(
-                bold("❌ This Bot Link Is Already Used By:\n\n")
-                + f"<code>{html.escape(user_doc.get('permanent_url') or '-')}</code>"
-            )
-            return message.stop_propagation()
-        label, log_id = await _describe_old(bot, text)
-        gone = True
-        if log_id:
-            try:
-                saved = await bot.get_messages(LOG_CHANNEL, log_id)
-                gone = (not saved) or bool(getattr(saved, "empty", False))
-            except Exception:
-                gone = True
-        if not log_id or gone:
-            await message.reply_text(bold("❌ Nothing Is Saved For This Bot Link (Deleted Or Not Valid)."))
-            return message.stop_propagation()
-        state["new"] = {
-            "share": f"{WEBSITE_URL.rstrip('/')}?start={param}",
-            "label": label,
-            "cache_key": f"existing:{param}",
-            "post_id": log_id,
-            "info": [f"<b>🔗 Existing Bot Link:</b> <code>{html.escape(label)}</code>"],
-        }
         state["step"] = "preview"
         await _show(state, _preview_text(state), _confirm_markup())
         return message.stop_propagation()
@@ -506,6 +554,248 @@ async def _finish_manual(bot, admin_id, state, outlist, failed):
     await _show(state, _preview_text(state), _confirm_markup())
 
 
+# ---------------- lists: Empty Links / Unused Bot Links ----------------
+# Both lists are built when opened (the log channel is checked then), shown 8 per page as buttons.
+
+def _log_id_of(share_link):
+    """The log-channel message a bot link delivers (the file, or Batch.json), or None."""
+    param = _start_param(share_link)
+    if not param:
+        return None
+    try:
+        if param.startswith("BATCH-"):
+            j = _b64(param[len("BATCH-"):])
+            return int(j) if j.isdigit() else None
+        kind, _, i = _b64(param).partition("_")
+        return int(i) if kind == "file" and i.isdigit() else None
+    except Exception:
+        return None
+
+
+async def _alive_ids(bot, ids):
+    """Which of these log-channel messages still exist. A failed check raises (never 'all gone')."""
+    alive, ids = set(), sorted(set(ids))
+    for i in range(0, len(ids), 200):
+        chunk = ids[i:i + 200]
+        res = await bot.get_messages(LOG_CHANNEL, chunk)
+        for m in res or []:
+            if m and not getattr(m, "empty", False):
+                alive.add(m.id)
+    return alive
+
+
+def _short(url):
+    return re.sub(r"^https?://", "", url or "").rstrip("/")
+
+
+async def _find_empty(bot):
+    docs = await links_col.find({"permanent_url": {"$exists": True, "$ne": None}}).to_list(length=None)
+    docs = [d for d in docs if d.get("permanent_url")]
+    alive = await _alive_ids(bot, [i for i in (_log_id_of(d.get("share_link")) for d in docs) if i])
+    out = []
+    for d in docs:
+        lid = _log_id_of(d.get("share_link"))
+        if lid is None or lid not in alive:
+            out.append(d)
+    out.sort(key=lambda d: d["permanent_url"])
+    return out
+
+
+async def _find_unused(bot):
+    recs = await unused_col.find({}).to_list(length=None)
+    alive = await _alive_ids(bot, [r["log_id"] for r in recs if r.get("log_id")])
+    out = []
+    for r in recs:
+        if r.get("log_id") not in alive or await _link_in_use(r["_id"]):
+            await unused_col.delete_one({"_id": r["_id"]})      # gone, or now used by a domain link
+            continue
+        out.append(r)
+    out.sort(key=lambda r: r.get("created_at") or datetime.min.replace(tzinfo=timezone.utc))
+    return out
+
+
+def _item_name(kind, item):
+    return _short(item["permanent_url"]) if kind == "empty" else (item.get("label") or "Unknown")
+
+
+def _list_text(kind, items):
+    if kind == "empty":
+        head, empty_msg = f"📭 Empty Links ({len(items)})", "No Empty Links."
+    else:
+        head, empty_msg = f"🤖 Unused Bot Links ({len(items)})", "No Unused Bot Links."
+    return bold(f"{head}\n\n{empty_msg}" if not items else head)
+
+
+def _list_markup(kind, items, page):
+    start = page * LIST_PAGE
+    rows = [[InlineKeyboardButton(_item_name(kind, items[i])[:60], callback_data=f"lnk_{kind}:i:{i}")]
+            for i in range(start, min(len(items), start + LIST_PAGE))]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("« Prev", callback_data=f"lnk_{kind}:p:{page - 1}"))
+    if start + LIST_PAGE < len(items):
+        nav.append(InlineKeyboardButton("Next »", callback_data=f"lnk_{kind}:p:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("❌ Close", callback_data="lnk_close")])
+    return InlineKeyboardMarkup(rows)
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_(empty|unused)$") & owner_only)
+async def list_open(bot, query):
+    kind = query.data.split("_", 1)[1]
+    await query.answer("Checking...")
+    try:
+        items = await (_find_empty if kind == "empty" else _find_unused)(bot)
+    except Exception as e:
+        print(f"LINK LIST ERROR: {type(e).__name__}: {e}")
+        return await query.message.reply_text(bold("❌ Could Not Check The Log Channel. Try Again."),
+                                              reply_markup=_close_markup())
+    _LISTS[query.from_user.id] = {"kind": kind, "items": items, "t": time.time()}
+    await query.message.reply_text(_list_text(kind, items), reply_markup=_list_markup(kind, items, 0))
+
+
+def _list_state(query, kind):
+    st = _LISTS.get(query.from_user.id)
+    if not st or st["kind"] != kind or time.time() - st["t"] > IDLE_SECONDS:
+        return None
+    st["t"] = time.time()
+    return st
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_(empty|unused):(p|i):\d+$") & owner_only)
+async def list_nav(bot, query):
+    kind, what, n = query.data[len("lnk_"):].split(":")
+    n = int(n)
+    st = _list_state(query, kind)
+    valid = (n * LIST_PAGE < max(len(st["items"]), 1)) if (st and what == "p") else bool(st)
+    if not valid:
+        return await query.answer("Expired. Open The List Again.", show_alert=True)
+    await query.answer()
+    items = st["items"]
+    if what == "p":
+        return await _edit(query, _list_text(kind, items), _list_markup(kind, items, n))
+    if n >= len(items):
+        return await query.answer("Expired. Open The List Again.", show_alert=True)
+    item, back = items[n], InlineKeyboardButton("« Back", callback_data=f"lnk_{kind}:p:{n // LIST_PAGE}")
+    if kind == "empty":
+        await _edit(
+            query,
+            bold(f"📭 {_short(item['permanent_url'])}\n\nContent: Empty"),
+            InlineKeyboardMarkup([[InlineKeyboardButton("♻️ Reuse This Link", callback_data=f"lnk_reuse:{n}")], [back]]),
+        )
+    else:
+        link = f"{WEBSITE_URL.rstrip('/')}?start={item['_id']}"
+        await _edit(
+            query,
+            bold(f"🤖 {html.escape(item.get('label') or 'Unknown')}\n\nNot Used By Any Domain Link")
+            + f"\n\n<code>{html.escape(link)}</code>",
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔗 Attach To Domain Link", callback_data=f"lnk_uattach:{n}"),
+                 InlineKeyboardButton("🗑 Delete", callback_data=f"lnk_udel:{n}")],
+                [back],
+            ]),
+        )
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_reuse:\d+$") & owner_only)
+async def reuse_empty(bot, query):
+    st, n = _list_state(query, "empty"), int(query.data.split(":")[1])
+    if not st or n >= len(st["items"]):
+        return await query.answer("Expired. Open The List Again.", show_alert=True)
+    await query.answer()
+    doc = st["items"][n]
+    key = doc["permanent_url"].rstrip("/").rsplit("/", 1)[-1]
+    _FLOW[query.from_user.id] = {
+        "step": "choose", "t": time.time(), "prompt": query.message, "doc": doc, "key": key,
+        "old": {"label": "Empty", "log_id": None}, "new": None,
+    }
+    text_, markup_ = _choose_view("Empty")
+    await _edit(query, text_, markup_)
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_uattach:\d+$") & owner_only)
+async def unused_attach(bot, query):
+    st, n = _list_state(query, "unused"), int(query.data.split(":")[1])
+    if not st or n >= len(st["items"]):
+        return await query.answer("Expired. Open The List Again.", show_alert=True)
+    await query.answer()
+    param = st["items"][n]["_id"]
+    _FLOW[query.from_user.id] = {
+        "step": "attach_domain", "t": time.time(), "prompt": query.message, "doc": None, "old": None,
+        "new": None, "preset": f"{WEBSITE_URL.rstrip('/')}?start={param}",
+    }
+    await _edit(query, bold("🔗 Attach To Domain Link\n\nSend The Domain Link."), _cancel_markup())
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_udel:\d+$") & owner_only)
+async def unused_delete(bot, query):
+    st, n = _list_state(query, "unused"), int(query.data.split(":")[1])
+    if not st or n >= len(st["items"]):
+        return await query.answer("Expired. Open The List Again.", show_alert=True)
+    await query.answer()
+    param = st["items"][n]["_id"]
+    link = f"{WEBSITE_URL.rstrip('/')}?start={param}"
+    label, log_id = await _describe_old(bot, link)
+    if not log_id:
+        return await _edit(query, bold("❌ Nothing Is Saved For This Bot Link."), _close_markup())
+    state = {"step": "dconfirm", "t": time.time(), "prompt": query.message, "doc": None, "new": None,
+             "mode": "delete", "dparam": param, "dlink": link, "old": {"label": label, "log_id": log_id}}
+    _FLOW[query.from_user.id] = state
+    await _show(state, _delete_text(state), _delete_markup())
+
+
+# ---------------- Free A Link ----------------
+# Removes the content (and its links post) of a domain link and keeps the domain link and the
+# shortener link, so the pair can be reused later (Empty Links -> Reuse This Link).
+
+def _free_text(state):
+    return (bold("🧹 Free This Link?\n\n")
+            + f"<code>{html.escape(_short(state['doc']['permanent_url']))}</code>\n"
+            + bold(f"Content: {state['old']['label']}\n\n"
+                   "Content And Its Links Post Will Be Removed.\n"
+                   "Domain Link And Shortener Stay For Reuse."))
+
+
+def _free_markup():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Yes, Free It", callback_data="lnk_freeyes"),
+        InlineKeyboardButton("❌ Cancel", callback_data="lnk_cancel"),
+    ]])
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_free$") & owner_only)
+async def free_start(bot, query):
+    await query.answer()
+    prompt = await query.message.reply_text(
+        bold("🧹 Free A Link\n\nSend The Domain Link You Want To Free."),
+        reply_markup=_cancel_markup(),
+    )
+    _FLOW[query.from_user.id] = {
+        "step": "free_link", "t": time.time(), "prompt": prompt,
+        "doc": None, "old": None, "new": None, "mode": "free",
+    }
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_freeyes$") & owner_only)
+async def free_confirm(bot, query):
+    admin_id = query.from_user.id
+    state = _FLOW.get(admin_id)
+    if not _fresh(state) or state["step"] != "fconfirm":
+        _FLOW.pop(admin_id, None)
+        return await query.answer("Expired. Start Again.", show_alert=True)
+    state["step"] = "freeing"
+    await query.answer("Freeing...")
+    try:
+        await _delete_saved(bot, state["old"]["log_id"])
+        result = bold("✅ Link Freed !!\n\nIt Is Now In Empty Links.")
+    except Exception as e:
+        print(f"FREE LINK ERROR: {type(e).__name__}: {e}")
+        result = bold("❌ Could Not Free The Link.\nNothing Was Changed.")
+    _FLOW.pop(admin_id, None)
+    await _show(state, result, _close_markup())
+
+
 # ---------------- delete link ----------------
 
 async def _link_in_use(param):
@@ -545,6 +835,10 @@ async def delete_confirm(bot, query):
     await _show(state, bold("⏳ Deleting The Bot Link..."))
     try:
         removed = await _delete_saved(bot, state["old"]["log_id"])
+        try:
+            await unused_col.delete_one({"_id": state["dparam"]})
+        except Exception:
+            pass
         result = bold("✅ Bot Link Deleted !!")
     except Exception as e:
         print(f"DELETE LINK LOG ERROR: {type(e).__name__}: {e}")
@@ -607,6 +901,10 @@ async def change_confirm(bot, query):
         upsert=True,
     )
     _FLOW.pop(admin_id, None)
+    try:
+        await unused_col.delete_one({"_id": _start_param(new["share"])})   # no longer "unused"
+    except Exception:
+        pass
 
     # Right under the new content in the log channel: its links (same post as /link and /batch make)
     await post_links_to_log(
@@ -643,7 +941,8 @@ async def change_confirm(bot, query):
     if old_id:
         token = secrets.token_hex(4)
         _DONE[token] = {"admin": admin_id, "old_log_id": old_id,
-                        "label": state["old"]["label"], "text": text}
+                        "label": state["old"]["label"], "text": text,
+                        "old_param": _start_param(doc.get("share_link"))}
         await _show(state, text, _choice_markup(token))
     else:
         await _show(state, text, _close_markup())
@@ -740,6 +1039,15 @@ async def keep_old(bot, query):
     if not job:
         return await query.answer("Expired.", show_alert=True)
     _DONE.pop(query.data.split(":", 1)[1], None)
+    if job.get("old_param") and job.get("old_log_id"):
+        try:
+            await unused_col.update_one(
+                {"_id": job["old_param"]},
+                {"$set": {"label": job["label"], "log_id": job["old_log_id"], "created_at": datetime.now(timezone.utc)}},
+                upsert=True,
+            )
+        except Exception as e:
+            print(f"UNUSED RECORD ERROR: {type(e).__name__}: {e}")
     await query.answer("Old content kept.")
     await _edit(query, bold("✅ Old Content Kept !!"), _close_markup())
 
