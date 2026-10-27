@@ -347,19 +347,25 @@ async def _make_new(session, rec):
     return short
 
 
-async def _move_one(session, rec, spares, notes=None):
-    """Moves one domain link. Returns "spare" or "new". Raises RuntimeError on failure.
-    A Spare that cannot be edited is skipped (dropped for this run) and the next one is tried;
-    the reason is kept in notes so it can be shown."""
-    while spares:
+class SpareBlocked(RuntimeError):
+    """A Spare link could not be edited. The run stops here (no new link is made behind the back)."""
+
+    def __init__(self, alias, why):
+        super().__init__(why)
+        self.alias = alias
+        self.why = why
+
+
+async def _move_one(session, rec, spares):
+    """Moves one domain link. Returns "spare" or "new". Raises RuntimeError on failure and
+    SpareBlocked when the next Spare link cannot be edited. A new link is made only when
+    there is no Spare link left."""
+    if spares:
         link = spares[0]
         try:
             await session.set_destination(link["alias"], rec["destination"])      # edit + check on the site
         except Exception as e:
-            if notes is not None:
-                notes.append((link["alias"], str(e) if isinstance(e, RuntimeError) else type(e).__name__))
-            spares.pop(0)
-            continue
+            raise SpareBlocked(link["alias"], str(e) if isinstance(e, RuntimeError) else type(e).__name__)
         data = await _worker("/admin/set-short", {"key": rec["key"], "shortUrl": link["short"]})
         if data.get("shortUrl") != link["short"]:
             raise RuntimeError("Worker Did Not Save The Link")
@@ -388,7 +394,7 @@ def _stop_markup():
 async def run_move(sc, session, on_progress, stop_flag):
     """Moves every pending domain link. Returns a result dict."""
     pending, spares = list(sc["pending"]), list(sc["spare"])
-    res = {"total": len(pending), "done": 0, "spare": 0, "new": 0, "failed": [], "stopped": False, "aborted": False, "notes": []}
+    res = {"total": len(pending), "done": 0, "spare": 0, "new": 0, "failed": [], "stopped": False, "aborted": False, "blocked": None}
     in_a_row = 0
     last = 0.0
     for rec in pending:
@@ -396,10 +402,13 @@ async def run_move(sc, session, on_progress, stop_flag):
             res["stopped"] = True
             break
         try:
-            how = await _move_one(session, rec, spares, res["notes"])
+            how = await _move_one(session, rec, spares)
             res["done"] += 1
             res[how] += 1
             in_a_row = 0
+        except SpareBlocked as e:
+            res["blocked"] = (e.alias, e.why)
+            break
         except Exception as e:
             why = str(e) if isinstance(e, RuntimeError) else type(e).__name__
             res["failed"].append((rec["key"], why))
@@ -414,16 +423,21 @@ async def run_move(sc, session, on_progress, stop_flag):
 
 
 def _result_text(res):
-    head = "⏹ Stopped" if res["stopped"] else ("⚠️ Stopped After Repeated Errors" if res["aborted"] else "✅ Move Finished")
+    if res["blocked"]:
+        head = "⏸ Stopped: A Spare Link Could Not Be Edited"
+    else:
+        head = "⏹ Stopped" if res["stopped"] else ("⚠️ Stopped After Repeated Errors" if res["aborted"] else "✅ Move Finished")
     text = (f"{head}\n\nTotal: {res['total']}\nDone: {res['done']}\n"
             f"Spare Used: {res['spare']}\nNew Created: {res['new']}\nFailed: {len(res['failed'])}")
     out = bold(text)
+    if res["blocked"]:
+        alias, why = res["blocked"]
+        out += "\n\n" + bold("Spare Link:") + f"\n<code>{html.escape(alias)}</code>\n" + bold("Reason:") + f"\n{html.escape(why)}"
+        out += "\n\n" + bold("Nothing New Was Created. Fix Or Hide This Spare Link, Then Tap Move All Again.")
+        return out
     if res["failed"]:
         lines = [f"{html.escape(k)}: {html.escape(w)}" for k, w in res["failed"][:6]]
         out += "\n\n" + bold("Failed:") + "\n" + "\n".join(lines)
-    if res["notes"]:
-        out += "\n\n" + bold(f"Spare Skipped: {len(res['notes'])}") + "\n" + "\n".join(
-            f"{html.escape(a)}: {html.escape(w)}" for a, w in res["notes"][:4])
     if res["stopped"] or res["aborted"] or res["failed"]:
         out += "\n\n" + bold("Open Vplink Links And Tap Move All Again To Continue.")
     return out
