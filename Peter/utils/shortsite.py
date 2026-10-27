@@ -121,6 +121,20 @@ def has_next(page):
     return 'rel="next"' in page
 
 
+def _page_error(page):
+    """The error text a form page shows (alert / help-block), short, or ''."""
+    for pat in (r'class="[^"]*alert-(?:danger|warning)[^"]*"[^>]*>(.*?)</div>',
+                r'class="help-block[^"]*"[^>]*>\s*([^<]{3,})<',
+                r'class="[^"]*error[^"]*"[^>]*>(.*?)</'):
+        m = re.search(pat, page, re.S)
+        if m:
+            text = re.sub(r"<[^>]+>", " ", m.group(1))
+            text = re.sub(r"\s+", " ", html.unescape(text)).strip()
+            if text:
+                return text[:80]
+    return ""
+
+
 class Session:
     """async with Session("vplink.in") as s: ...  (signs in once, reuses the session)"""
 
@@ -200,9 +214,15 @@ class Session:
         if not _set(form["fields"], "url", new_url):
             raise RuntimeError("Long URL field not found")
         async with self._http.post(urljoin(self.base, form["action"]), data=[tuple(f) for f in form["fields"]]) as r:
-            await r.text()
-        if await self.get_destination(alias) != new_url:
-            raise RuntimeError("The website did not save the new URL")
+            answer = await r.text()
+            status = r.status
+        saved = await self.get_destination(alias)
+        if saved != new_url:
+            # say what the website answered, so the real reason can be seen
+            note = _page_error(answer)
+            raise RuntimeError(
+                f"The website did not save the new URL (HTTP {status}"
+                + (f", {note}" if note else "") + f", it keeps {(saved or '')[:60]})")
 
     async def hide(self, alias):
         """Hides a link from All Links (the website has no delete)."""
