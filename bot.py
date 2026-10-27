@@ -1,4 +1,5 @@
 import asyncio
+import random
 import logging
 import logging.config
 from datetime import date, datetime
@@ -83,14 +84,18 @@ async def start():
         logging.warning(f"Couldn't send the restart message to REPORT_CHANNEL: {type(e).__name__}: {e}")
     print("Bot Started Successfully!")
     await idle()
-    # idle() returns on SIGTERM / SIGINT (docker stop / down / restart, server shutdown)
+    # idle() returns on SIGTERM / SIGINT (docker stop / down / restart, server shutdown).
+    # All bots stop at the same moment and share one report channel, so each bot waits a
+    # random 0-6 seconds first and the send may take up to 20 seconds (a short FloodWait is
+    # slept out by Pyrogram). docker-compose needs stop_grace_period: 30s for this.
     try:
+        await asyncio.sleep(random.uniform(0, 6))
         await asyncio.wait_for(
-            StreamBot.send_message(chat_id=REPORT_CHANNEL, text="<b>🛑 Bot Stopped</b>"), timeout=5)
+            StreamBot.send_message(chat_id=REPORT_CHANNEL, text="<b>🛑 Bot Stopped</b>"), timeout=20)
     except Exception as e:
         logging.warning(f"Couldn't send the stopped message to REPORT_CHANNEL: {type(e).__name__}: {e}")
     try:
-        await asyncio.wait_for(StreamBot.stop(), timeout=3)
+        await asyncio.wait_for(StreamBot.stop(), timeout=4)
     except Exception:
         pass
 
