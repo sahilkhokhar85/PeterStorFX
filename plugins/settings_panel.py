@@ -110,7 +110,8 @@ async def _settings_cb_inner(client: Client, query: CallbackQuery):
                  InlineKeyboardButton("🗑 Delete Link", callback_data="lnk_delete")],
                 [InlineKeyboardButton("📭 Empty Links", callback_data="lnk_empty"),
                  InlineKeyboardButton("🤖 Unused Bot Links", callback_data="lnk_unused")],
-                [InlineKeyboardButton("🧹 Free A Link", callback_data="lnk_free")],
+                [InlineKeyboardButton("🧹 Free A Link", callback_data="lnk_free"),
+                 InlineKeyboardButton("🔗 Vplink Links", callback_data="vpl_open")],
                 [InlineKeyboardButton("« Back", callback_data="adm_menu")],
             ]),
         )
