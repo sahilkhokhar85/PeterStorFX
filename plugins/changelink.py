@@ -32,7 +32,7 @@ from pyrogram.errors.exceptions.bad_request_400 import ChannelInvalid
 
 from config import ADMINS, LOG_CHANNEL, WEBSITE_URL
 from Peter.utils.cover_copy import copy_keep_cover
-from Peter.utils import arolinks_edit
+from Peter.utils import shortsite
 from plugins.genlink import (
     links_col, PERMANENT_LINK_WORKER_URL, PERMANENT_LINK_ADMIN_KEY,
     bold, encode_start, make_file_share_link, get_message_cache_key,
@@ -911,14 +911,16 @@ async def change_confirm(bot, query):
         bot, new["post_id"], query.from_user, new["info"], doc["permanent_url"], new["share"],
     )
 
-    # Arolinks has no API for this, so the bot edits the short link the way the
-    # website does (see Peter/utils/arolinks_edit.py). If that is not possible
+    # The shortener sites (Vplink, Arolinks) have no API for this, so the bot edits the short
+    # link the way the website does (see Peter/utils/shortsite.py). If that is not possible
     # the manual steps are shown instead.
-    alias = short_url.rstrip("/").rsplit("/", 1)[-1] if short_url else None
+    site = shortsite.site_for(short_url) if short_url else None
+    site_name = (shortsite.host_of(short_url).split(".")[0].title() if site else "The Shortener")
+    can_edit = bool(site and shortsite.configured(shortsite.host_of(short_url)))
     auto, why = False, ""
-    if alias and arolinks_edit.configured():
-        await _show(state, bold("⏳ Updating Arolinks..."))
-        auto, why = await arolinks_edit.set_destination(alias, new["share"])
+    if can_edit:
+        await _show(state, bold(f"⏳ Updating {site_name}..."))
+        auto, why = await shortsite.set_destination_once(short_url, new["share"])
 
     done = (bold("✅ Link Changed !!\n\n")
             + f"<code>{html.escape(doc['permanent_url'])}</code>\n"
@@ -928,13 +930,13 @@ async def change_confirm(bot, query):
     else:
         # The short link could not be edited by the bot: show what to edit by hand.
         head = ""
-        if alias and arolinks_edit.configured():
-            head = f"⚠️ Arolinks Not Updated: {html.escape(why)}\n\n"
+        if can_edit:
+            head = f"⚠️ {site_name} Not Updated: {html.escape(why)}\n\n"
         text = done + "\n\n"
         if short_url:
-            text += bold(head + "Edit This In Arolinks:") + f"\n<code>{html.escape(short_url)}</code>\n\n"
+            text += bold(head + f"Edit This In {site_name}:") + f"\n<code>{html.escape(short_url)}</code>\n\n"
         else:
-            text += bold(head + "Edit The Short Link In Arolinks.") + "\n\n"
+            text += bold(head + f"Edit The Short Link In {site_name}.") + "\n\n"
         text += bold("Set The New URL To:") + f"\n<code>{html.escape(new['share'])}</code>"
 
     old_id = state["old"]["log_id"]
