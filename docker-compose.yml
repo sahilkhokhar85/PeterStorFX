@@ -2,6 +2,7 @@ x-bot: &bot
   build: .
   image: peterstorfx
   restart: always
+  stop_grace_period: 30s
   logging:
     driver: json-file
     options: {max-size: "10m", max-file: "3"}
