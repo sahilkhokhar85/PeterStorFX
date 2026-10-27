@@ -64,7 +64,12 @@ async def _worker(path, payload):
                 if r.status == 404 and path in ("/admin/list", "/admin/set-short"):
                     raise RuntimeError("Worker Is Old (Upload worker_v4)")
                 if r.status != 200:
-                    raise RuntimeError(f"Worker HTTP {r.status}")
+                    why = ""
+                    try:
+                        why = str(json.loads(body).get("error") or "")
+                    except Exception:
+                        why = body[:80].strip()
+                    raise RuntimeError(f"Worker HTTP {r.status}" + (f": {why}" if why else ""))
                 data = json.loads(body)
     except RuntimeError:
         raise
@@ -116,7 +121,8 @@ def classify(vp_links, records):
             broken.append({"link": link, "rec": rec, "why": "wrong"})
         else:
             in_use.append({"link": link, "rec": rec})
-    spare = [l for l in vp_links if l["alias"] not in used]
+    # vplink lists the newest link first; Spare links are reused oldest first
+    spare = [l for l in reversed(vp_links) if l["alias"] not in used]
     return {"in_use": in_use, "spare": spare, "broken": broken, "pending": pending}
 
 
@@ -341,14 +347,17 @@ async def _make_new(session, rec):
     return short
 
 
-async def _move_one(session, rec, spares):
+async def _move_one(session, rec, spares, notes=None):
     """Moves one domain link. Returns "spare" or "new". Raises RuntimeError on failure.
-    A Spare that cannot be edited is skipped (dropped for this run) and the next one is tried."""
+    A Spare that cannot be edited is skipped (dropped for this run) and the next one is tried;
+    the reason is kept in notes so it can be shown."""
     while spares:
         link = spares[0]
         try:
             await session.set_destination(link["alias"], rec["destination"])      # edit + check on the site
-        except Exception:
+        except Exception as e:
+            if notes is not None:
+                notes.append((link["alias"], str(e) if isinstance(e, RuntimeError) else type(e).__name__))
             spares.pop(0)
             continue
         data = await _worker("/admin/set-short", {"key": rec["key"], "shortUrl": link["short"]})
@@ -379,7 +388,7 @@ def _stop_markup():
 async def run_move(sc, session, on_progress, stop_flag):
     """Moves every pending domain link. Returns a result dict."""
     pending, spares = list(sc["pending"]), list(sc["spare"])
-    res = {"total": len(pending), "done": 0, "spare": 0, "new": 0, "failed": [], "stopped": False, "aborted": False}
+    res = {"total": len(pending), "done": 0, "spare": 0, "new": 0, "failed": [], "stopped": False, "aborted": False, "notes": []}
     in_a_row = 0
     last = 0.0
     for rec in pending:
@@ -387,7 +396,7 @@ async def run_move(sc, session, on_progress, stop_flag):
             res["stopped"] = True
             break
         try:
-            how = await _move_one(session, rec, spares)
+            how = await _move_one(session, rec, spares, res["notes"])
             res["done"] += 1
             res[how] += 1
             in_a_row = 0
@@ -412,6 +421,9 @@ def _result_text(res):
     if res["failed"]:
         lines = [f"{html.escape(k)}: {html.escape(w)}" for k, w in res["failed"][:6]]
         out += "\n\n" + bold("Failed:") + "\n" + "\n".join(lines)
+    if res["notes"]:
+        out += "\n\n" + bold(f"Spare Skipped: {len(res['notes'])}") + "\n" + "\n".join(
+            f"{html.escape(a)}: {html.escape(w)}" for a, w in res["notes"][:4])
     if res["stopped"] or res["aborted"] or res["failed"]:
         out += "\n\n" + bold("Open Vplink Links And Tap Move All Again To Continue.")
     return out
