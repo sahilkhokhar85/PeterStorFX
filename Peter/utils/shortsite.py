@@ -45,6 +45,7 @@ class _Forms(HTMLParser):
         self.forms = []
         self._form = None
         self._area = None
+        self._select = None     # [name, first option value, selected option value or None]
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
@@ -58,6 +59,14 @@ class _Forms(HTMLParser):
             if kind in ("checkbox", "radio") and "checked" not in a:
                 return
             self._form["fields"].append([a["name"], a.get("value") or ""])
+        elif tag == "select" and self._form is not None and a.get("name"):
+            self._select = [a["name"], None, None]
+        elif tag == "option" and self._select is not None:
+            value = a.get("value") or ""
+            if self._select[1] is None:
+                self._select[1] = value
+            if "selected" in a:
+                self._select[2] = value
         elif tag == "textarea" and self._form is not None and a.get("name"):
             self._area = [a["name"], ""]
             self._form["fields"].append(self._area)
@@ -65,6 +74,12 @@ class _Forms(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "form":
             self._form = None
+        elif tag == "select" and self._select is not None:
+            # like a browser: the selected option, else the first one (empty for the date fields)
+            value = self._select[2] if self._select[2] is not None else (self._select[1] or "")
+            if self._form is not None:
+                self._form["fields"].append([self._select[0], value])
+            self._select = None
         elif tag == "textarea":
             self._area = None
 
@@ -213,13 +228,15 @@ class Session:
         form = await self._edit_form(alias)
         if not _set(form["fields"], "url", new_url):
             raise RuntimeError("Long URL field not found")
-        async with self._http.post(urljoin(self.base, form["action"]), data=[tuple(f) for f in form["fields"]]) as r:
+        action = urljoin(self.base, form["action"])
+        headers = {"Referer": f"{self.base}/member/links/edit/{alias}", "Origin": self.base}
+        async with self._http.post(action, data=[tuple(f) for f in form["fields"]], headers=headers) as r:
             answer = await r.text()
             status = r.status
         saved = await self.get_destination(alias)
         if saved != new_url:
             # say what the website answered, so the real reason can be seen
-            note = _page_error(answer)
+            note = _page_error(answer) or re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html.unescape(answer))).strip()[:80]
             raise RuntimeError(
                 f"The website did not save the new URL (HTTP {status}"
                 + (f", {note}" if note else "") + f", it keeps {(saved or '')[:60]})")
