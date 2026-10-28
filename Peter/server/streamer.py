@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from aiohttp import web
 from pyrogram import raw
-from pyrogram.errors import AuthBytesInvalid
+from pyrogram.errors import AuthBytesInvalid, FloodWait
 from pyrogram.file_id import FileId
 from pyrogram.session import Auth, Session
 
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 MEDIA_TYPES = ("document", "video", "audio", "photo", "animation", "voice", "video_note")
 CHUNK_SIZE = 1024 * 1024
-PREFETCH = 6   # parts asked from Telegram at the same time (6 MB in flight per open stream)
+PREFETCH = 3   # parts asked from Telegram at the same time (3 MB in flight per open stream)
 
 # Logo shown at the top-left of the watch page (any public image link).
 LOGO_URL = "https://files.catbox.moe/3yc512.png"
@@ -216,10 +216,20 @@ class ByteStreamer:
         media_session = await self.generate_media_session(file_id)
         location = await self.get_location(file_id)
 
+        async def get(i):
+            # Telegram sometimes answers FLOOD_WAIT (a second or two) to GetFile: wait and ask again
+            for attempt in range(6):
+                try:
+                    return await media_session.send(
+                        raw.functions.upload.GetFile(location=location, offset=offset + i * chunk_size, limit=chunk_size)
+                    )
+                except FloodWait as e:
+                    if attempt == 5:
+                        raise
+                    await asyncio.sleep(min(int(e.value), 10) + 0.3)
+
         def fetch(i):
-            return asyncio.ensure_future(media_session.send(
-                raw.functions.upload.GetFile(location=location, offset=offset + i * chunk_size, limit=chunk_size)
-            ))
+            return asyncio.ensure_future(get(i))
 
         ahead = min(PREFETCH, part_count)
         tasks = {i: fetch(i) for i in range(ahead)}
