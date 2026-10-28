@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 MEDIA_TYPES = ("document", "video", "audio", "photo", "animation", "voice", "video_note")
 CHUNK_SIZE = 1024 * 1024
+PREFETCH = 6   # parts asked from Telegram at the same time (6 MB in flight per open stream)
 
 # Logo shown at the top-left of the watch page (any public image link).
 LOGO_URL = "https://files.catbox.moe/3yc512.png"
@@ -210,41 +211,50 @@ class ByteStreamer:
         )
 
     async def yield_file(self, file_id, offset, first_part_cut, last_part_cut, part_count, chunk_size):
+        """Sends the file part by part. Up to PREFETCH parts are asked from Telegram at the same
+        time, so the speed is not limited by waiting for each 1 MB part one after another."""
         media_session = await self.generate_media_session(file_id)
         location = await self.get_location(file_id)
-        current_part = 1
-        r = await media_session.send(
-            raw.functions.upload.GetFile(location=location, offset=offset, limit=chunk_size)
-        )
-        if not isinstance(r, raw.types.upload.File):
-            raise StreamFileNotFound
 
-        while True:
-            chunk = r.bytes
-            if not chunk:
-                break
+        def fetch(i):
+            return asyncio.ensure_future(media_session.send(
+                raw.functions.upload.GetFile(location=location, offset=offset + i * chunk_size, limit=chunk_size)
+            ))
 
-            if part_count == 1:
-                data = chunk[first_part_cut:last_part_cut]
-            elif current_part == 1:
-                data = chunk[first_part_cut:]
-            elif current_part == part_count:
-                data = chunk[:last_part_cut]
-            else:
-                data = chunk
+        ahead = min(PREFETCH, part_count)
+        tasks = {i: fetch(i) for i in range(ahead)}
+        next_i = ahead
+        try:
+            for i in range(part_count):
+                r = await tasks.pop(i)
+                if next_i < part_count:
+                    tasks[next_i] = fetch(next_i)
+                    next_i += 1
+                if not isinstance(r, raw.types.upload.File):
+                    if i == 0:
+                        raise StreamFileNotFound
+                    break
+                chunk = r.bytes
+                if not chunk:
+                    break
 
-            if data:
-                yield data
+                current_part = i + 1
+                if part_count == 1:
+                    data = chunk[first_part_cut:last_part_cut]
+                elif current_part == 1:
+                    data = chunk[first_part_cut:]
+                elif current_part == part_count:
+                    data = chunk[:last_part_cut]
+                else:
+                    data = chunk
 
-            current_part += 1
-            offset += chunk_size
-            if current_part > part_count:
-                break
-            r = await media_session.send(
-                raw.functions.upload.GetFile(location=location, offset=offset, limit=chunk_size)
-            )
-            if not isinstance(r, raw.types.upload.File):
-                break
+                if data:
+                    yield data
+        finally:
+            for t in tasks.values():
+                t.cancel()
+            if tasks:
+                await asyncio.gather(*tasks.values(), return_exceptions=True)
 
 
 _streamer: Optional[ByteStreamer] = None
