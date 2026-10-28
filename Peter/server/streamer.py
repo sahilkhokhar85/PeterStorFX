@@ -220,10 +220,22 @@ class ByteStreamer:
         media_session = await self.generate_media_session(file_id)
         location = await self.get_location(file_id)
 
+        async def renew_session(failed):
+            """The connection to Telegram's file server stopped answering: drop it and open a fresh one."""
+            nonlocal media_session
+            if self.client.media_sessions.get(file_id.dc_id) is failed:
+                self.client.media_sessions.pop(file_id.dc_id, None)
+                try:
+                    asyncio.ensure_future(failed.stop())
+                except Exception:
+                    pass
+            media_session = await self.generate_media_session(file_id)
+
         async def get(i):
             # Telegram sometimes answers FLOOD_WAIT (a second or two) or a 500 TIMEOUT to GetFile
             # (its own server was slow): wait a little and ask the same part again
             for attempt in range(6):
+                used = media_session
                 try:
                     return await media_session.send(
                         raw.functions.upload.GetFile(location=location, offset=offset + i * chunk_size, limit=chunk_size)
@@ -236,6 +248,11 @@ class ByteStreamer:
                     if attempt == 5:
                         raise
                     await asyncio.sleep(0.5 * (attempt + 1))
+                except (asyncio.TimeoutError, TimeoutError):
+                    # "Request timed out": no answer at all from the connection
+                    if attempt >= 3:
+                        raise
+                    await renew_session(used)
 
         def fetch(i):
             return asyncio.ensure_future(get(i))
