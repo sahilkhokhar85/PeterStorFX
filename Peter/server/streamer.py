@@ -11,6 +11,7 @@ import logging
 import math
 import mimetypes
 import re
+import time
 import urllib.parse
 from typing import Any, Dict, Optional, Tuple
 
@@ -30,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 MEDIA_TYPES = ("document", "video", "audio", "photo", "animation", "voice", "video_note")
 CHUNK_SIZE = 1024 * 1024
+_RENEW_LOCK = asyncio.Lock()
+_LAST_RENEW: Dict[int, float] = {}
 PREFETCH = 3   # parts asked from Telegram at the same time (3 MB in flight per open stream)
 
 # Logo shown at the top-left of the watch page (any public image link).
@@ -221,15 +224,30 @@ class ByteStreamer:
         location = await self.get_location(file_id)
 
         async def renew_session(failed):
-            """The connection to Telegram's file server stopped answering: drop it and open a fresh one."""
+            """The connection to Telegram's file server stopped answering: open a fresh one.
+            Opening one for another data centre uses auth.ExportAuthorization, which Telegram
+            limits hard (waits of minutes), so: at most once a minute per data centre, one task
+            at a time, and the old connection is kept if the new one cannot be made."""
             nonlocal media_session
-            if self.client.media_sessions.get(file_id.dc_id) is failed:
-                self.client.media_sessions.pop(file_id.dc_id, None)
+            dc = file_id.dc_id
+            async with _RENEW_LOCK:
+                cur = self.client.media_sessions.get(dc)
+                if cur is not None and cur is not failed:
+                    media_session = cur                      # another task already renewed it
+                    return
+                if time.time() - _LAST_RENEW.get(dc, 0) < 60:
+                    return                                   # too soon: keep what we have
+                _LAST_RENEW[dc] = time.time()
+                self.client.media_sessions.pop(dc, None)
+                try:
+                    media_session = await self.generate_media_session(file_id)
+                except Exception:
+                    self.client.media_sessions[dc] = failed  # keep the old one
+                    return
                 try:
                     asyncio.ensure_future(failed.stop())
                 except Exception:
                     pass
-            media_session = await self.generate_media_session(file_id)
 
         async def get(i):
             # Telegram sometimes answers FLOOD_WAIT (a second or two) or a 500 TIMEOUT to GetFile
@@ -248,10 +266,11 @@ class ByteStreamer:
                     if attempt == 5:
                         raise
                     await asyncio.sleep(0.5 * (attempt + 1))
-                except (asyncio.TimeoutError, TimeoutError):
-                    # "Request timed out": no answer at all from the connection
+                except (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError):
+                    # "Request timed out" / "Connection lost": no answer from the connection
                     if attempt >= 3:
                         raise
+                    await asyncio.sleep(0.5 * (attempt + 1))
                     await renew_session(used)
 
         def fetch(i):
