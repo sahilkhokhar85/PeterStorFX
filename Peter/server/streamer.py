@@ -17,6 +17,10 @@ from typing import Any, Dict, Optional, Tuple
 from aiohttp import web
 from pyrogram import raw
 from pyrogram.errors import AuthBytesInvalid, FloodWait
+try:
+    from pyrogram.errors import InternalServerError
+except ImportError:                      # older Pyrogram: the 500 errors have no common class
+    from pyrogram.errors import Timeout as InternalServerError
 from pyrogram.file_id import FileId
 from pyrogram.session import Auth, Session
 
@@ -217,7 +221,8 @@ class ByteStreamer:
         location = await self.get_location(file_id)
 
         async def get(i):
-            # Telegram sometimes answers FLOOD_WAIT (a second or two) to GetFile: wait and ask again
+            # Telegram sometimes answers FLOOD_WAIT (a second or two) or a 500 TIMEOUT to GetFile
+            # (its own server was slow): wait a little and ask the same part again
             for attempt in range(6):
                 try:
                     return await media_session.send(
@@ -227,6 +232,10 @@ class ByteStreamer:
                     if attempt == 5:
                         raise
                     await asyncio.sleep(min(int(e.value), 10) + 0.3)
+                except InternalServerError:
+                    if attempt == 5:
+                        raise
+                    await asyncio.sleep(0.5 * (attempt + 1))
 
         def fetch(i):
             return asyncio.ensure_future(get(i))
