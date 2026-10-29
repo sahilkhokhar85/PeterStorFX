@@ -868,26 +868,25 @@ async def clear_confirm(bot, query):
         content = await _clear_targets(bot)
         total, done, failed = len(content), 0, 0
         for n, (kind, lid, item) in enumerate(content, 1):
-            try:
-                await _delete_saved(bot, lid)
-                if kind == "unused":
-                    await unused_col.delete_one({"_id": item["_id"]})
-                done += 1
-            except FloodWait as e:
-                await asyncio.sleep(int(e.value) + 1)
+            ok = False
+            for attempt in range(6):
                 try:
                     await _delete_saved(bot, lid)
                     if kind == "unused":
                         await unused_col.delete_one({"_id": item["_id"]})
-                    done += 1
-                except Exception:
-                    failed += 1
-            except Exception as e:
-                print(f"CLEAR ERROR: {type(e).__name__}: {e}")
-                failed += 1
+                    ok = True
+                    break
+                except FloodWait as e:
+                    print(f"CLEAR FLOOD: waiting {e.value}s")
+                    await asyncio.sleep(int(e.value) + 1)       # then try the same one again
+                except Exception as e:
+                    print(f"CLEAR ERROR: {type(e).__name__}: {e}")
+                    break
+            done += ok
+            failed += not ok
             if n % 5 == 0:
                 await _edit(query, bold(f"⏳ Freeing...\n\nDone: {done} / {total}"), None)
-            await asyncio.sleep(0.4)
+            await asyncio.sleep(1.0)
         text = f"✅ Everything Freed !!\n\nDeleted: {done}"
         if failed:
             text += f"\nFailed: {failed}\nTap Free Everything Again To Retry."
