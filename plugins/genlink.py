@@ -30,6 +30,7 @@ from config import (
 from plugins.admins_db import is_admin
 from plugins.dbusers import db
 from Peter.utils.cover_copy import copy_keep_cover
+from Peter.utils import shortsite
 
 
 # ============================================================
@@ -241,6 +242,86 @@ def make_file_share_link(log_message_id):
     return f"{WEBSITE_URL.rstrip('/')}?start={encoded}"
 
 
+def _file_log_id(share_link):
+    """The log-channel message id inside a single-file bot link, or None."""
+    m = re.search(r"[?&]start=([A-Za-z0-9_-]+)$", share_link or "")
+    if not m:
+        return None
+    param = m.group(1)
+    try:
+        raw = base64.urlsafe_b64decode(param + "=" * (-len(param) % 4)).decode()
+    except Exception:
+        return None
+    kind, _, i = raw.partition("_")
+    return int(i) if kind == "file" and i.isdigit() else None
+
+
+async def _content_gone(bot, share_link):
+    """True when the saved file behind this bot link was deleted from the log channel.
+    If it cannot be checked, the content is assumed to be there."""
+    lid = _file_log_id(share_link)
+    if not lid:
+        return False
+    try:
+        client = bot
+        if client is None:
+            from Peter.bot import StreamBot as client
+        m = await client.get_messages(LOG_CHANNEL, lid)
+    except Exception:
+        return False
+    return (not m) or bool(getattr(m, "empty", False))
+
+
+async def _worker_call(path, payload):
+    """JSON answer of a Worker admin endpoint. Raises RuntimeError with a short reason."""
+    if not PERMANENT_LINK_WORKER_URL or not PERMANENT_LINK_ADMIN_KEY:
+        raise RuntimeError("Worker URL or admin key is missing")
+    url = f"{PERMANENT_LINK_WORKER_URL.rstrip('/')}{path}"
+    headers = {"Content-Type": "application/json", "X-Admin-Key": PERMANENT_LINK_ADMIN_KEY}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            async with session.post(url, json=payload, headers=headers) as r:
+                body = await r.text()
+                if r.status != 200:
+                    raise RuntimeError(f"Worker HTTP {r.status}")
+                data = json.loads(body)
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Worker {type(e).__name__}")
+    if not data.get("success"):
+        raise RuntimeError(str(data.get("error") or "Worker refused"))
+    return data
+
+
+async def _refresh_stale(source_message, saved):
+    """The saved content of this file was deleted from the log channel: store the file again
+    and point the SAME domain link and shortener link at it. Returns (new_share_link, post_id).
+    Raises RuntimeError (and removes the new copy) if the links could not be moved."""
+    post = await copy_keep_cover(source_message, LOG_CHANNEL)
+    new_share = make_file_share_link(post.id)
+    permanent = saved.get("permanent_url")
+    try:
+        if permanent:
+            key = permanent.rstrip("/").rsplit("/", 1)[-1]
+            short = (await _worker_call("/admin/get", {"key": key})).get("shortUrl")
+            host = shortsite.host_of(short) if short else ""
+            if short and shortsite.site_for(short) and shortsite.configured(host):
+                ok, why = await shortsite.set_destination_once(short, new_share)
+                if not ok:
+                    raise RuntimeError(f"Shortener Not Updated: {why}")
+            await _worker_call("/admin/update", {"key": key, "destination": new_share})
+        await links_col.update_one({"_id": saved["_id"]},
+                                   {"$set": {"share_link": new_share, "updated_at": datetime.now(timezone.utc)}})
+    except BaseException:
+        try:
+            await post.delete()
+        except Exception:
+            pass
+        raise
+    return new_share, post.id
+
+
 def _plural(n, word):
     return f"{n} {word}{'' if n == 1 else 's'}"
 
@@ -333,6 +414,28 @@ async def build_link_reply(source_message, bot=None, admin=None, bot_only=False)
     it in LOG_CHANNEL."""
     cache_key = get_message_cache_key(source_message)
     saved = await get_saved_link(cache_key)
+
+    # The saved copy was deleted from the log channel (for example the channel was cleaned):
+    # the old links would open nothing, so the file is stored again.
+    if saved and saved.get("share_link") and await _content_gone(bot, saved["share_link"]):
+        if bot_only:
+            saved = None          # just a new bot link, the old pair is left alone
+        else:
+            try:
+                new_share, new_id = await _refresh_stale(source_message, saved)
+            except RuntimeError as e:
+                return bold(f"❌ Could Not Refresh The Old Link.\n{html.escape(str(e))}")
+            if bot and new_id:
+                name, size = _file_info(source_message)
+                await post_links_to_log(
+                    bot, new_id, admin,
+                    [
+                        f"<b>🎬 File:</b> <code>{html.escape(name)}</code>",
+                        f"<b>📦 Size: {_human_size(size)}</b>",
+                    ],
+                    saved.get("permanent_url"), new_share,
+                )
+            saved = dict(saved, share_link=new_share)
 
     if bot_only:
         # Only the bot link: no domain link, no shortener, nothing saved in the Worker/database.
