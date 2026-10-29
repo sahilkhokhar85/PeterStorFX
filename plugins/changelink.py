@@ -866,7 +866,7 @@ async def clear_confirm(bot, query):
     try:
         await _edit(query, bold("⏳ Checking..."), None)
         content = await _clear_targets(bot)
-        total, done, failed = len(content), 0, 0
+        total, done, failed, reasons = len(content), 0, 0, []
         for n, (kind, lid, item) in enumerate(content, 1):
             ok = False
             for attempt in range(6):
@@ -877,10 +877,13 @@ async def clear_confirm(bot, query):
                     ok = True
                     break
                 except FloodWait as e:
-                    print(f"CLEAR FLOOD: waiting {e.value}s")
+                    print(f"CLEAR FLOOD: waiting {e.value}s", flush=True)
                     await asyncio.sleep(int(e.value) + 1)       # then try the same one again
                 except Exception as e:
-                    print(f"CLEAR ERROR: {type(e).__name__}: {e}")
+                    print(f"CLEAR ERROR: {type(e).__name__}: {e}", flush=True)
+                    why = f"{type(e).__name__}: {str(e)[:90]}"
+                    if why not in reasons:
+                        reasons.append(why)
                     break
             done += ok
             failed += not ok
@@ -890,6 +893,8 @@ async def clear_confirm(bot, query):
         text = f"✅ Everything Freed !!\n\nDeleted: {done}"
         if failed:
             text += f"\nFailed: {failed}\nTap Free Everything Again To Retry."
+            if reasons:
+                text += "\n\nReason:\n" + "\n".join(html.escape(r) for r in reasons[:3])
         text += "\n\nDomain Links Are Now In Empty Links."
         await _edit(query, bold(text), _close_markup())
     except Exception as e:
