@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 import aiohttp
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.errors import FloodWait
 from pyrogram.errors.exceptions.bad_request_400 import ChannelInvalid
 
 from config import ADMINS, LOG_CHANNEL, WEBSITE_URL
@@ -794,6 +795,109 @@ async def free_confirm(bot, query):
         result = bold("❌ Could Not Free The Link.\nNothing Was Changed.")
     _FLOW.pop(admin_id, None)
     await _show(state, result, _close_markup())
+
+
+# ---------------- Free Everything ----------------
+# One tap: removes the saved content (and its "Links For The Message Above" post) behind EVERY
+# domain link, and every unused bot link. Domain links and shortener links stay (the domain
+# links then show up in Empty Links, ready to be reused).
+
+CLEAR_CONFIRM_SECONDS = 120
+_CLEAR_RUN = set()
+
+
+async def _clear_targets(bot):
+    docs = await links_col.find({"permanent_url": {"$exists": True, "$ne": None}}).to_list(length=None)
+    docs = [d for d in docs if d.get("permanent_url")]
+    recs = await unused_col.find({}).to_list(length=None)
+    ids = [i for i in (_log_id_of(d.get("share_link")) for d in docs) if i]
+    ids += [r["log_id"] for r in recs if r.get("log_id")]
+    alive = await _alive_ids(bot, ids)
+    seen, content = set(), []
+    for d in docs:
+        lid = _log_id_of(d.get("share_link"))
+        if lid and lid in alive and lid not in seen:
+            seen.add(lid)
+            content.append(("domain", lid, d))
+    for r in recs:
+        lid = r.get("log_id")
+        if lid and lid in alive and lid not in seen:
+            seen.add(lid)
+            content.append(("unused", lid, r))
+    return content
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_clear$") & owner_only)
+async def clear_start(bot, query):
+    await query.answer("Checking...")
+    try:
+        content = await _clear_targets(bot)
+    except Exception as e:
+        print(f"CLEAR CHECK ERROR: {type(e).__name__}: {e}")
+        return await query.message.reply_text(bold("❌ Could Not Check The Log Channel. Try Again."),
+                                              reply_markup=_close_markup())
+    domain = sum(1 for k, _, _ in content if k == "domain")
+    unused = len(content) - domain
+    if not content:
+        return await query.message.reply_text(bold("✅ Nothing To Free.\n\nAll Links Are Already Empty."),
+                                              reply_markup=_close_markup())
+    await query.message.reply_text(
+        bold("🧹 Free Everything?\n\n"
+             f"Domain Links With Content: {domain}\n"
+             f"Unused Bot Links: {unused}\n\n"
+             "All Their Saved Content Will Be Deleted.\n"
+             "Domain Links And Shortener Links Stay."),
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Yes, Free Everything", callback_data=f"lnk_clearyes:{int(time.time())}"),
+            InlineKeyboardButton("❌ Cancel", callback_data="lnk_close"),
+        ]]),
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^lnk_clearyes:\d+$") & owner_only)
+async def clear_confirm(bot, query):
+    if time.time() - int(query.data.split(":")[1]) > CLEAR_CONFIRM_SECONDS:
+        return await query.answer("Expired. Open Free Everything Again.", show_alert=True)
+    admin = query.from_user.id
+    if admin in _CLEAR_RUN:
+        return await query.answer("Already Running.", show_alert=True)
+    _CLEAR_RUN.add(admin)
+    await query.answer("Started")
+    try:
+        await _edit(query, bold("⏳ Checking..."), None)
+        content = await _clear_targets(bot)
+        total, done, failed = len(content), 0, 0
+        for n, (kind, lid, item) in enumerate(content, 1):
+            try:
+                await _delete_saved(bot, lid)
+                if kind == "unused":
+                    await unused_col.delete_one({"_id": item["_id"]})
+                done += 1
+            except FloodWait as e:
+                await asyncio.sleep(int(e.value) + 1)
+                try:
+                    await _delete_saved(bot, lid)
+                    if kind == "unused":
+                        await unused_col.delete_one({"_id": item["_id"]})
+                    done += 1
+                except Exception:
+                    failed += 1
+            except Exception as e:
+                print(f"CLEAR ERROR: {type(e).__name__}: {e}")
+                failed += 1
+            if n % 5 == 0:
+                await _edit(query, bold(f"⏳ Freeing...\n\nDone: {done} / {total}"), None)
+            await asyncio.sleep(0.4)
+        text = f"✅ Everything Freed !!\n\nDeleted: {done}"
+        if failed:
+            text += f"\nFailed: {failed}\nTap Free Everything Again To Retry."
+        text += "\n\nDomain Links Are Now In Empty Links."
+        await _edit(query, bold(text), _close_markup())
+    except Exception as e:
+        print(f"CLEAR RUN ERROR: {type(e).__name__}: {e}")
+        await _edit(query, bold("❌ Stopped By An Error. Tap Free Everything Again."), _close_markup())
+    finally:
+        _CLEAR_RUN.discard(admin)
 
 
 # ---------------- delete link ----------------
