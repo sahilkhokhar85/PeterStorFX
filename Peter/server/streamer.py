@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 MEDIA_TYPES = ("document", "video", "audio", "photo", "animation", "voice", "video_note")
 CHUNK_SIZE = 1024 * 1024
 _RENEW_LOCK = asyncio.Lock()
+_GET_LIMIT = asyncio.Semaphore(4)     # GetFile requests in flight at the same time (all streams of this bot)
+_FLOOD_UNTIL = 0.0                   # time until which Telegram asked us to wait
 _LAST_RENEW: Dict[int, float] = {}
 PREFETCH = 3   # parts asked from Telegram at the same time (3 MB in flight per open stream)
 
@@ -250,20 +252,25 @@ class ByteStreamer:
                     pass
 
         async def get(i):
-            # Telegram sometimes answers FLOOD_WAIT (a second or two) or a 500 TIMEOUT to GetFile
-            # (its own server was slow): wait a little and ask the same part again
-            for attempt in range(6):
+            # All streams of this bot share one limit: Telegram answers FLOOD_WAIT when too many
+            # GetFile requests are in flight. On a FLOOD_WAIT every stream pauses until it is over.
+            global _FLOOD_UNTIL
+            for attempt in range(12):
+                pause = _FLOOD_UNTIL - time.time()
+                if pause > 0:
+                    await asyncio.sleep(pause)
                 used = media_session
                 try:
-                    return await media_session.send(
-                        raw.functions.upload.GetFile(location=location, offset=offset + i * chunk_size, limit=chunk_size)
-                    )
+                    async with _GET_LIMIT:
+                        return await media_session.send(
+                            raw.functions.upload.GetFile(location=location, offset=offset + i * chunk_size, limit=chunk_size)
+                        )
                 except FloodWait as e:
-                    if attempt == 5:
+                    if attempt == 11:
                         raise
-                    await asyncio.sleep(min(int(e.value), 10) + 0.3)
+                    _FLOOD_UNTIL = max(_FLOOD_UNTIL, time.time() + min(int(e.value), 30) + 0.3)
                 except InternalServerError:
-                    if attempt == 5:
+                    if attempt >= 5:
                         raise
                     await asyncio.sleep(0.5 * (attempt + 1))
                 except (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError):
