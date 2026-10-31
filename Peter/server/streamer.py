@@ -33,6 +33,12 @@ MEDIA_TYPES = ("document", "video", "audio", "photo", "animation", "voice", "vid
 CHUNK_SIZE = 1024 * 1024
 _RENEW_LOCK = asyncio.Lock()
 _DC_LOCK = asyncio.Lock()
+_GAP = 0.05                          # seconds between two GetFile requests (all streams of this bot)
+_MIN_GAP, _MAX_GAP = 0.03, 1.0
+_NEXT_SLOT = 0.0
+_LAST_SLOWDOWN = 0.0
+_OK_STREAK = 0
+_PACE_LOCK = asyncio.Lock()
 _GET_LIMIT = asyncio.Semaphore(4)     # GetFile requests in flight at the same time (all streams of this bot)
 _FLOOD_UNTIL = 0.0                   # time until which Telegram asked us to wait
 _LAST_RENEW: Dict[int, float] = {}
@@ -129,6 +135,36 @@ def humanbytes(size) -> str:
         size /= power
         n += 1
     return f"{size:.2f} {units[n]}"
+
+
+
+async def _pace():
+    """Starts GetFile requests evenly spaced (not all at once), so Telegram does not answer FLOOD_WAIT."""
+    global _NEXT_SLOT
+    async with _PACE_LOCK:
+        now = time.time()
+        start = max(now, _NEXT_SLOT)
+        _NEXT_SLOT = start + _GAP
+    if start > now:
+        await asyncio.sleep(start - now)
+
+
+def _slow_down():
+    """Telegram said FLOOD_WAIT: space the requests wider (once per burst of floods)."""
+    global _GAP, _LAST_SLOWDOWN, _OK_STREAK
+    _OK_STREAK = 0
+    if time.time() - _LAST_SLOWDOWN > 1.0:
+        _LAST_SLOWDOWN = time.time()
+        _GAP = min(_GAP * 1.6, _MAX_GAP)
+
+
+def _speed_up():
+    """Many requests in a row worked: space them a little closer again."""
+    global _GAP, _OK_STREAK
+    _OK_STREAK += 1
+    if _OK_STREAK >= 40:
+        _OK_STREAK = 0
+        _GAP = max(_GAP * 0.9, _MIN_GAP)
 
 
 class ByteStreamer:
@@ -288,15 +324,20 @@ class ByteStreamer:
                     await asyncio.sleep(pause)
                 used = media_session
                 try:
+                    await _pace()
                     async with _GET_LIMIT:
-                        return await media_session.send(
+                        res = await media_session.send(
                             raw.functions.upload.GetFile(location=location, offset=offset + i * chunk_size, limit=chunk_size)
                         )
+                    _speed_up()
+                    return res
                 except FloodWait as e:
-                    logger.warning(f"[STREAM] flood dc={file_id.dc_id} wait={e.value}s attempt={attempt}")
+                    if int(e.value) >= 3 or attempt >= 3:
+                        logger.warning(f"[STREAM] flood dc={file_id.dc_id} wait={e.value}s attempt={attempt} gap={_GAP:.2f}")
                     if attempt == 11:
                         raise
                     _FLOOD_UNTIL = max(_FLOOD_UNTIL, time.time() + min(int(e.value), 30) + 0.3)
+                    _slow_down()
                 except InternalServerError:
                     logger.warning(f"[STREAM] telegram 500 timeout dc={file_id.dc_id} attempt={attempt}")
                     if attempt >= 5:
