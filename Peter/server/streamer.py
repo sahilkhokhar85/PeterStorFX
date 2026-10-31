@@ -10,13 +10,14 @@ import html
 import logging
 import math
 import mimetypes
+import os
 import re
 import time
 import urllib.parse
 from typing import Any, Dict, Optional, Tuple
 
 from aiohttp import web
-from pyrogram import raw
+from pyrogram import Client, raw
 from pyrogram.errors import AuthBytesInvalid, FloodWait
 try:
     from pyrogram.errors import InternalServerError
@@ -25,7 +26,7 @@ except ImportError:                      # older Pyrogram: the 500 errors have n
 from pyrogram.file_id import FileId
 from pyrogram.session import Auth, Session
 
-from config import BOT_TOKEN, STREAM_SECRET, URL
+from config import API_HASH, API_ID, BOT_TOKEN, STREAM_SECRET, URL
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ _NEXT_SLOT = 0.0
 _LAST_SLOWDOWN = 0.0
 _OK_STREAK = 0
 _PACE_LOCK = asyncio.Lock()
-_GET_LIMIT = asyncio.Semaphore(10)     # GetFile requests in flight at the same time (all streams of this bot)
+_GET_LIMIT = asyncio.Semaphore(24)     # GetFile requests in flight at the same time (all streams of this bot)
 _FLOOD_UNTIL = 0.0                   # time until which Telegram asked us to wait
 _LAST_RENEW: Dict[int, float] = {}
 PREFETCH = 6   # parts asked from Telegram at the same time (3 MB in flight per open stream)
@@ -168,6 +169,57 @@ def _speed_up():
     if _OK_STREAK >= 40:
         _OK_STREAK = 0
         _GAP = max(_GAP * 0.9, _MIN_GAP)
+
+
+
+# ---------------------------------------------------------------------------
+# Helper bots: other bots' tokens (env STREAM_HELPER_TOKENS, comma separated) are logged in inside
+# this bot too, and a stream's parts are fetched through all of them at the same time. Telegram
+# limits download speed per bot account, so every extra account adds its own share of speed.
+# ---------------------------------------------------------------------------
+HELPER_MAX = 3
+_HELPERS = None            # list of ByteStreamer (one per started helper bot) once ready
+_HELPER_TASK = None
+_LANE_SESSIONS: Dict[Tuple[int, int], Any] = {}   # (helper index, data centre) -> connection
+_LANE_TASKS: Dict[Tuple[int, int], Any] = {}
+
+
+class _Lane:
+    """One bot account used for a stream: its connections and the file location as THAT bot sees it."""
+    __slots__ = ("sessions", "location", "flood_until", "name")
+
+    def __init__(self, sessions, location, name):
+        self.sessions, self.location, self.name, self.flood_until = sessions, location, name, 0.0
+
+
+async def _start_helpers():
+    global _HELPERS
+    out = []
+    tokens = []
+    for t in re.split(r"[\s,]+", (os.getenv("STREAM_HELPER_TOKENS") or "").replace('"', "").replace("'", "")):
+        if t and ":" in t and t != BOT_TOKEN and t not in tokens:
+            tokens.append(t)
+    for t in tokens[:HELPER_MAX]:
+        try:
+            c = Client(f"streamhelper_{BOT_TOKEN.split(':')[0]}_{t.split(':')[0]}", api_id=API_ID, api_hash=API_HASH,
+                       bot_token=t, in_memory=True, no_updates=True)
+            await asyncio.wait_for(c.start(), timeout=60)
+            out.append(ByteStreamer(c))
+        except Exception as e:
+            logger.warning(f"[STREAM] helper bot {t.split(':')[0]} did not start: {type(e).__name__}")
+    _HELPERS = out
+    logger.warning(f"[STREAM] helper bots ready: {len(out)}")
+
+
+async def _prep_lane(idx, helper, file_id):
+    key = (idx, file_id.dc_id)
+    try:
+        _LANE_SESSIONS[key] = await helper.generate_media_session(file_id)
+    except Exception as e:
+        logger.warning(f"[STREAM] helper {idx} connection to dc={file_id.dc_id} failed: {type(e).__name__}")
+        await asyncio.sleep(60)             # try again after a minute, not at once
+    finally:
+        _LANE_TASKS.pop(key, None)
 
 
 class ByteStreamer:
@@ -314,17 +366,34 @@ class ByteStreamer:
             thumb_size=file_id.thumbnail_size,
         )
 
-    async def yield_file(self, file_id, offset, first_part_cut, last_part_cut, part_count, chunk_size):
-        """Sends the file part by part. Up to PREFETCH parts are asked from Telegram at the same
-        time, so the speed is not limited by waiting for each 1 MB part one after another."""
+    async def yield_file(self, file_id, offset, first_part_cut, last_part_cut, part_count, chunk_size, source=None):
+        """Sends the file part by part. Several parts are asked from Telegram at the same time and
+        spread over all available bot accounts (this bot + helper bots) and connections."""
+        global _HELPER_TASK
         media_session = await self.generate_media_session(file_id)
         location = await self.get_location(file_id)
         try:
             pool = await self.media_pool(file_id, media_session)
         except Exception:
             pool = [media_session]
-        logger.warning(f"[STREAM] start dc={file_id.dc_id} own_dc_session={'yes' if file_id.dc_id in self.client.media_sessions else 'no'} "
-                       f"offset_mb={offset // chunk_size} parts={part_count}")
+        lanes = [_Lane(pool, location, "main")]
+
+        # helper bots: used as soon as their connection to this data centre is ready
+        if source and os.getenv("STREAM_HELPER_TOKENS"):
+            if _HELPER_TASK is None:
+                _HELPER_TASK = asyncio.ensure_future(_start_helpers())
+            for idx, h in enumerate(_HELPERS or []):
+                sess = _LANE_SESSIONS.get((idx, file_id.dc_id))
+                if sess is None:
+                    if (idx, file_id.dc_id) not in _LANE_TASKS:
+                        _LANE_TASKS[(idx, file_id.dc_id)] = asyncio.ensure_future(_prep_lane(idx, h, file_id))
+                    continue
+                try:
+                    hf = await asyncio.wait_for(h.get_file_properties(*source), timeout=15)
+                    lanes.append(_Lane([sess], await h.get_location(hf), f"helper{idx}"))
+                except Exception as e:
+                    logger.warning(f"[STREAM] helper {idx} cannot read the file: {type(e).__name__}")
+        logger.warning(f"[STREAM] start dc={file_id.dc_id} accounts={len(lanes)} offset_mb={offset // chunk_size} parts={part_count}")
 
         async def renew_session(failed):
             """The connection to Telegram's file server stopped answering: open a fresh one.
@@ -353,54 +422,56 @@ class ByteStreamer:
                     pass
 
         async def get(i):
-            # All streams of this bot share one limit: Telegram answers FLOOD_WAIT when too many
-            # GetFile requests are in flight. On a FLOOD_WAIT every stream pauses until it is over.
-            global _FLOOD_UNTIL
+            # Part i goes to account (i % number of accounts); a retry goes to the next account.
+            # Telegram's FLOOD_WAIT pauses only the account that got it.
             for attempt in range(12):
-                pause = _FLOOD_UNTIL - time.time()
-                if pause > 0:
-                    await asyncio.sleep(pause)
-                used = pool[i % len(pool)]
+                lane = lanes[(i + attempt) % len(lanes)]
+                wait = lane.flood_until - time.time()
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                used = lane.sessions[(i // len(lanes)) % len(lane.sessions)]
                 try:
                     await _pace()
                     async with _GET_LIMIT:
                         res = await used.send(
-                            raw.functions.upload.GetFile(location=location, offset=offset + i * chunk_size, limit=chunk_size)
+                            raw.functions.upload.GetFile(location=lane.location, offset=offset + i * chunk_size, limit=chunk_size)
                         )
                     _speed_up()
                     return res
                 except FloodWait as e:
                     if int(e.value) >= 3 or attempt >= 3:
-                        logger.warning(f"[STREAM] flood dc={file_id.dc_id} wait={e.value}s attempt={attempt} gap={_GAP:.2f}")
+                        logger.warning(f"[STREAM] flood {lane.name} dc={file_id.dc_id} wait={e.value}s attempt={attempt} gap={_GAP:.2f}")
                     if attempt == 11:
                         raise
-                    _FLOOD_UNTIL = max(_FLOOD_UNTIL, time.time() + min(int(e.value), 30) + 0.3)
+                    lane.flood_until = max(lane.flood_until, time.time() + min(int(e.value), 30) + 0.3)
                     _slow_down()
                 except InternalServerError:
-                    logger.warning(f"[STREAM] telegram 500 timeout dc={file_id.dc_id} attempt={attempt}")
+                    logger.warning(f"[STREAM] telegram 500 timeout {lane.name} dc={file_id.dc_id} attempt={attempt}")
                     if attempt >= 5:
                         raise
                     await asyncio.sleep(0.5 * (attempt + 1))
                 except (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError):
-                    # "Request timed out" / "Connection lost": no answer from the connection
-                    logger.warning(f"[STREAM] no answer dc={file_id.dc_id} attempt={attempt}")
+                    logger.warning(f"[STREAM] no answer {lane.name} dc={file_id.dc_id} attempt={attempt}")
                     if attempt >= 3:
                         raise
                     await asyncio.sleep(0.5 * (attempt + 1))
-                    if len(pool) > 1 and used in pool:
-                        pool.remove(used)          # drop the connection that stopped answering
+                    if lane.name != "main":
+                        if len(lanes) > 1 and lane in lanes:
+                            lanes.remove(lane)          # this helper stopped answering: leave it out
+                    elif len(lane.sessions) > 1 and used in lane.sessions:
+                        lane.sessions.remove(used)      # drop the connection that stopped answering
                         try:
                             asyncio.ensure_future(used.stop())
                         except Exception:
                             pass
                     else:
                         await renew_session(used)
-                        pool[:] = [media_session]
+                        lane.sessions[:] = [media_session]
 
         def fetch(i):
             return asyncio.ensure_future(get(i))
 
-        ahead = min(PREFETCH, part_count)
+        ahead = min(PREFETCH + 3 * (len(lanes) - 1), part_count)
         tasks = {i: fetch(i) for i in range(ahead)}
         next_i = ahead
         try:
@@ -685,7 +756,8 @@ async def stream_media(request: web.Request, chat_id: int, message_id: int, secu
 
     try:
         async for chunk in streamer.yield_file(
-            file_id, offset, first_part_cut, last_part_cut, part_count, CHUNK_SIZE
+            file_id, offset, first_part_cut, last_part_cut, part_count, CHUNK_SIZE,
+            source=(chat_id, message_id),
         ):
             await response.write(chunk)
     except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
