@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 MEDIA_TYPES = ("document", "video", "audio", "photo", "animation", "voice", "video_note")
 CHUNK_SIZE = 1024 * 1024
 _RENEW_LOCK = asyncio.Lock()
+_DC_LOCK = asyncio.Lock()
 _GET_LIMIT = asyncio.Semaphore(4)     # GetFile requests in flight at the same time (all streams of this bot)
 _FLOOD_UNTIL = 0.0                   # time until which Telegram asked us to wait
 _LAST_RENEW: Dict[int, float] = {}
@@ -166,10 +167,34 @@ class ByteStreamer:
 
 
     async def generate_media_session(self, file_id: FileId) -> Session:
+        """One connection per data centre. Making it for a data centre other than the bot's own
+        needs auth.ExportAuthorization, which Telegram limits hard and which can also hang:
+        one task at a time, a time limit, and a FLOOD_WAIT is waited out (not failed)."""
         client = self.client
         media_session = client.media_sessions.get(file_id.dc_id)
         if media_session is not None:
             return media_session
+        async with _DC_LOCK:
+            media_session = client.media_sessions.get(file_id.dc_id)
+            if media_session is not None:
+                return media_session
+            for attempt in range(4):
+                try:
+                    logger.warning(f"[STREAM] opening connection to dc={file_id.dc_id} attempt={attempt}")
+                    return await asyncio.wait_for(self._open_media_session(file_id), timeout=40)
+                except FloodWait as e:
+                    logger.warning(f"[STREAM] dc={file_id.dc_id} connection flood wait={e.value}s")
+                    if attempt == 3 or int(e.value) > 300:
+                        raise
+                    await asyncio.sleep(int(e.value) + 1)
+                except (asyncio.TimeoutError, TimeoutError):
+                    logger.warning(f"[STREAM] dc={file_id.dc_id} connection timed out attempt={attempt}")
+                    if attempt == 3:
+                        raise
+
+    async def _open_media_session(self, file_id: FileId) -> Session:
+        client = self.client
+        media_session = None
 
         test_mode = await client.storage.test_mode()
         if file_id.dc_id != await client.storage.dc_id():
@@ -224,6 +249,8 @@ class ByteStreamer:
         time, so the speed is not limited by waiting for each 1 MB part one after another."""
         media_session = await self.generate_media_session(file_id)
         location = await self.get_location(file_id)
+        logger.warning(f"[STREAM] start dc={file_id.dc_id} own_dc_session={'yes' if file_id.dc_id in self.client.media_sessions else 'no'} "
+                       f"offset_mb={offset // chunk_size} parts={part_count}")
 
         async def renew_session(failed):
             """The connection to Telegram's file server stopped answering: open a fresh one.
@@ -266,15 +293,18 @@ class ByteStreamer:
                             raw.functions.upload.GetFile(location=location, offset=offset + i * chunk_size, limit=chunk_size)
                         )
                 except FloodWait as e:
+                    logger.warning(f"[STREAM] flood dc={file_id.dc_id} wait={e.value}s attempt={attempt}")
                     if attempt == 11:
                         raise
                     _FLOOD_UNTIL = max(_FLOOD_UNTIL, time.time() + min(int(e.value), 30) + 0.3)
                 except InternalServerError:
+                    logger.warning(f"[STREAM] telegram 500 timeout dc={file_id.dc_id} attempt={attempt}")
                     if attempt >= 5:
                         raise
                     await asyncio.sleep(0.5 * (attempt + 1))
                 except (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError):
                     # "Request timed out" / "Connection lost": no answer from the connection
+                    logger.warning(f"[STREAM] no answer dc={file_id.dc_id} attempt={attempt}")
                     if attempt >= 3:
                         raise
                     await asyncio.sleep(0.5 * (attempt + 1))
