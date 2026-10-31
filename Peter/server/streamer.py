@@ -33,16 +33,16 @@ MEDIA_TYPES = ("document", "video", "audio", "photo", "animation", "voice", "vid
 CHUNK_SIZE = 1024 * 1024
 _RENEW_LOCK = asyncio.Lock()
 _DC_LOCK = asyncio.Lock()
-_GAP = 0.05                          # seconds between two GetFile requests (all streams of this bot)
-_MIN_GAP, _MAX_GAP = 0.03, 1.0
+_GAP = 0.015                         # seconds between two GetFile requests (all streams of this bot)
+_MIN_GAP, _MAX_GAP = 0.008, 1.0
 _NEXT_SLOT = 0.0
 _LAST_SLOWDOWN = 0.0
 _OK_STREAK = 0
 _PACE_LOCK = asyncio.Lock()
-_GET_LIMIT = asyncio.Semaphore(4)     # GetFile requests in flight at the same time (all streams of this bot)
+_GET_LIMIT = asyncio.Semaphore(10)     # GetFile requests in flight at the same time (all streams of this bot)
 _FLOOD_UNTIL = 0.0                   # time until which Telegram asked us to wait
 _LAST_RENEW: Dict[int, float] = {}
-PREFETCH = 3   # parts asked from Telegram at the same time (3 MB in flight per open stream)
+PREFETCH = 6   # parts asked from Telegram at the same time (3 MB in flight per open stream)
 
 # Logo shown at the top-left of the watch page (any public image link).
 LOGO_URL = "https://files.catbox.moe/3yc512.png"
