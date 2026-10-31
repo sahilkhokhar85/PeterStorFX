@@ -33,6 +33,9 @@ MEDIA_TYPES = ("document", "video", "audio", "photo", "animation", "voice", "vid
 CHUNK_SIZE = 1024 * 1024
 _RENEW_LOCK = asyncio.Lock()
 _DC_LOCK = asyncio.Lock()
+_POOL_LOCK = asyncio.Lock()
+_POOL: Dict[int, list] = {}          # data centre -> connections used together (only the bot's own DC)
+POOL_SIZE = 3
 _GAP = 0.015                         # seconds between two GetFile requests (all streams of this bot)
 _MIN_GAP, _MAX_GAP = 0.008, 1.0
 _NEXT_SLOT = 0.0
@@ -228,6 +231,32 @@ class ByteStreamer:
                     if attempt == 3:
                         raise
 
+    async def media_pool(self, file_id: FileId, base):
+        """Several connections to the bot's OWN data centre (same login, so no extra Telegram
+        permission is needed). Parts are spread over them, which is faster than one connection.
+        For any other data centre the single connection is used."""
+        dc = file_id.dc_id
+        pool = _POOL.get(dc)
+        if pool:
+            return pool
+        async with _POOL_LOCK:
+            pool = _POOL.get(dc)
+            if pool:
+                return pool
+            pool = [base]
+            try:
+                if dc == await self.client.storage.dc_id():
+                    test_mode = await self.client.storage.test_mode()
+                    for _ in range(POOL_SIZE - 1):
+                        extra = Session(self.client, dc, await self.client.storage.auth_key(), test_mode, is_media=True)
+                        await asyncio.wait_for(extra.start(), timeout=20)
+                        pool.append(extra)
+            except Exception as e:
+                logger.warning(f"[STREAM] extra connections for dc={dc} failed: {type(e).__name__}")
+            _POOL[dc] = pool
+            logger.warning(f"[STREAM] dc={dc} using {len(pool)} connection(s)")
+            return pool
+
     async def _open_media_session(self, file_id: FileId) -> Session:
         client = self.client
         media_session = None
@@ -285,6 +314,10 @@ class ByteStreamer:
         time, so the speed is not limited by waiting for each 1 MB part one after another."""
         media_session = await self.generate_media_session(file_id)
         location = await self.get_location(file_id)
+        try:
+            pool = await self.media_pool(file_id, media_session)
+        except Exception:
+            pool = [media_session]
         logger.warning(f"[STREAM] start dc={file_id.dc_id} own_dc_session={'yes' if file_id.dc_id in self.client.media_sessions else 'no'} "
                        f"offset_mb={offset // chunk_size} parts={part_count}")
 
@@ -322,11 +355,11 @@ class ByteStreamer:
                 pause = _FLOOD_UNTIL - time.time()
                 if pause > 0:
                     await asyncio.sleep(pause)
-                used = media_session
+                used = pool[i % len(pool)]
                 try:
                     await _pace()
                     async with _GET_LIMIT:
-                        res = await media_session.send(
+                        res = await used.send(
                             raw.functions.upload.GetFile(location=location, offset=offset + i * chunk_size, limit=chunk_size)
                         )
                     _speed_up()
@@ -349,7 +382,15 @@ class ByteStreamer:
                     if attempt >= 3:
                         raise
                     await asyncio.sleep(0.5 * (attempt + 1))
-                    await renew_session(used)
+                    if len(pool) > 1 and used in pool:
+                        pool.remove(used)          # drop the connection that stopped answering
+                        try:
+                            asyncio.ensure_future(used.stop())
+                        except Exception:
+                            pass
+                    else:
+                        await renew_session(used)
+                        pool[:] = [media_session]
 
         def fetch(i):
             return asyncio.ensure_future(get(i))
