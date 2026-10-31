@@ -244,20 +244,24 @@ class ByteStreamer:
             if pool:
                 return pool
             pool = [base]
-            try:
-                if dc == await self.client.storage.dc_id():
-                    test_mode = await self.client.storage.test_mode()
-                    for _ in range(POOL_SIZE - 1):
-                        extra = Session(self.client, dc, await self.client.storage.auth_key(), test_mode, is_media=True)
-                        await asyncio.wait_for(extra.start(), timeout=20)
-                        pool.append(extra)
-            except Exception as e:
-                logger.warning(f"[STREAM] extra connections for dc={dc} failed: {type(e).__name__}")
+            # Extra connections to the same data centre. For the bot's own data centre they reuse
+            # its login; for another one each needs a Telegram permission (ExportAuthorization),
+            # which Telegram limits, so a FLOOD_WAIT or any error simply stops adding more.
+            for _ in range(POOL_SIZE - 1):
+                try:
+                    extra = await asyncio.wait_for(self._open_media_session(file_id, store=False), timeout=30)
+                    pool.append(extra)
+                except FloodWait as e:
+                    logger.warning(f"[STREAM] dc={dc} extra connection flood wait={e.value}s: using {len(pool)}")
+                    break
+                except Exception as e:
+                    logger.warning(f"[STREAM] extra connection for dc={dc} failed: {type(e).__name__}")
+                    break
             _POOL[dc] = pool
             logger.warning(f"[STREAM] dc={dc} using {len(pool)} connection(s)")
             return pool
 
-    async def _open_media_session(self, file_id: FileId) -> Session:
+    async def _open_media_session(self, file_id: FileId, store: bool = True) -> Session:
         client = self.client
         media_session = None
 
@@ -297,7 +301,8 @@ class ByteStreamer:
             )
             await media_session.start()
 
-        client.media_sessions[file_id.dc_id] = media_session
+        if store:
+            client.media_sessions[file_id.dc_id] = media_session
         return media_session
 
     @staticmethod
