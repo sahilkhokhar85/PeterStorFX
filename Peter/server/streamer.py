@@ -199,6 +199,23 @@ async def _start_helpers():
     for t in re.split(r"[\s,]+", (os.getenv("STREAM_HELPER_TOKENS") or "").replace('"', "").replace("'", "")):
         if t and ":" in t and t != BOT_TOKEN and t not in tokens:
             tokens.append(t)
+    # a user account (session string): Telegram gives user accounts much more download speed than bots
+    ss = (os.getenv("STREAM_SESSION_STRING") or "").strip().strip("\"'")
+    if ss:
+        try:
+            c = Client(f"streamuser_{BOT_TOKEN.split(':')[0]}", api_id=API_ID, api_hash=API_HASH,
+                       session_string=ss, in_memory=True, no_updates=True)
+            await asyncio.wait_for(c.start(), timeout=60)
+            try:                                   # a user account must load its chats to see the log channel
+                async for _ in c.get_dialogs(limit=300):
+                    pass
+            except Exception as e:
+                logger.warning(f"[STREAM] user account could not load its chats: {type(e).__name__}")
+            bs = ByteStreamer(c)
+            bs.is_user = True
+            out.append(bs)
+        except Exception as e:
+            logger.warning(f"[STREAM] user account did not start: {type(e).__name__}: {e}")
     for t in tokens[:HELPER_MAX]:
         try:
             c = Client(f"streamhelper_{BOT_TOKEN.split(':')[0]}_{t.split(':')[0]}", api_id=API_ID, api_hash=API_HASH,
@@ -379,7 +396,7 @@ class ByteStreamer:
         lanes = [_Lane(pool, location, "main")]
 
         # helper bots: used as soon as their connection to this data centre is ready
-        if source and os.getenv("STREAM_HELPER_TOKENS"):
+        if source and (os.getenv("STREAM_HELPER_TOKENS") or os.getenv("STREAM_SESSION_STRING")):
             if _HELPER_TASK is None:
                 _HELPER_TASK = asyncio.ensure_future(_start_helpers())
             for idx, h in enumerate(_HELPERS or []):
@@ -390,7 +407,7 @@ class ByteStreamer:
                     continue
                 try:
                     hf = await asyncio.wait_for(h.get_file_properties(*source), timeout=15)
-                    lanes.append(_Lane([sess], await h.get_location(hf), f"helper{idx}"))
+                    lanes.append(_Lane([sess], await h.get_location(hf), "user" if getattr(h, "is_user", False) else f"helper{idx}"))
                 except Exception as e:
                     logger.warning(f"[STREAM] helper {idx} cannot read the file: {type(e).__name__}")
         logger.warning(f"[STREAM] start dc={file_id.dc_id} accounts={len(lanes)} offset_mb={offset // chunk_size} parts={part_count}")
