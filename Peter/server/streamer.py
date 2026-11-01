@@ -12,6 +12,7 @@ import math
 import mimetypes
 import os
 import re
+import shutil
 import time
 import urllib.parse
 from typing import Any, Dict, Optional, Tuple
@@ -47,6 +48,20 @@ _GET_LIMIT = asyncio.Semaphore(24)     # GetFile requests in flight at the same 
 _FLOOD_UNTIL = 0.0                   # time until which Telegram asked us to wait
 _LAST_RENEW: Dict[int, float] = {}
 PREFETCH = 6   # parts asked from Telegram at the same time (3 MB in flight per open stream)
+
+# ---- disk cache: the file is pulled from Telegram into a temporary file and served from there ----
+CACHE_ON = os.getenv("STREAM_CACHE", "1") != "0"
+CACHE_DIR = os.getenv("STREAM_CACHE_DIR", "/tmp/stream_cache")
+CACHE_TTL = 24 * 3600                                                    # a cached file lives 24 hours
+CACHE_MAX = int(float(os.getenv("STREAM_CACHE_GB", "10")) * 1024 ** 3)   # total cache size per bot
+CACHE_MIN = int(float(os.getenv("STREAM_CACHE_MIN_MB", "8")) * 1024 ** 2)  # smaller files are streamed directly
+CACHE_KEEP_FREE = 3 * 1024 ** 3                                          # always leave this much of the disk free
+CACHE_PREFETCH = 20                                                      # parts asked from Telegram at once while filling
+CACHE_WINDOW = 48 * 1024 ** 2                                            # a request this far ahead of the fill still waits for it
+CACHE_IDLE = 90                                                          # stop filling when nobody has read for this long (seconds)
+_CACHE: Dict[str, "_CacheEntry"] = {}
+_CACHE_TASK = None
+_CACHE_PURGED = False
 
 # Logo shown at the top-left of the watch page (any public image link).
 LOGO_URL = "https://files.catbox.moe/3yc512.png"
@@ -383,7 +398,7 @@ class ByteStreamer:
             thumb_size=file_id.thumbnail_size,
         )
 
-    async def yield_file(self, file_id, offset, first_part_cut, last_part_cut, part_count, chunk_size, source=None):
+    async def yield_file(self, file_id, offset, first_part_cut, last_part_cut, part_count, chunk_size, source=None, prefetch=None):
         """Sends the file part by part. Several parts are asked from Telegram at the same time and
         spread over all available bot accounts (this bot + helper bots) and connections."""
         global _HELPER_TASK
@@ -488,7 +503,7 @@ class ByteStreamer:
         def fetch(i):
             return asyncio.ensure_future(get(i))
 
-        ahead = min(PREFETCH + 3 * (len(lanes) - 1), part_count)
+        ahead = min((prefetch or PREFETCH) + 3 * (len(lanes) - 1), part_count)
         tasks = {i: fetch(i) for i in range(ahead)}
         next_i = ahead
         try:
@@ -707,6 +722,180 @@ _WATCH_PAGE = """<!DOCTYPE html>
 </html>"""
 
 
+class _CacheEntry:
+    def __init__(self, key, path, size):
+        self.key = key
+        self.path = path
+        self.size = size
+        self.written = 0                 # bytes already on disk (always from the start of the file)
+        self.done = False
+        self.failed = False
+        self.readers = 0
+        self.created = time.time()
+        self.last_active = time.time()
+        self.cond = asyncio.Condition()
+        self.task = None
+
+
+def _cache_remove(entry):
+    _CACHE.pop(entry.key, None)
+    try:
+        os.remove(entry.path)
+    except OSError:
+        pass
+
+
+def _cache_used() -> int:
+    return sum(e.size for e in _CACHE.values() if not e.failed)
+
+
+async def _cache_cleaner():
+    while True:
+        await asyncio.sleep(300)
+        now = time.time()
+        for e in list(_CACHE.values()):
+            if e.readers == 0 and (e.failed or (e.done and now - e.created > CACHE_TTL)):
+                logger.warning(f"[CACHE] removed {e.key[:10]} (expired)" if not e.failed else f"[CACHE] removed {e.key[:10]} (failed)")
+                _cache_remove(e)
+
+
+def _write_all(fd: int, data: bytes):
+    view = memoryview(data)
+    while view:
+        n = os.write(fd, view)
+        view = view[n:]
+
+
+async def _cache_fill(streamer, entry: _CacheEntry, file_id, source):
+    part_count = math.ceil(entry.size / CHUNK_SIZE)
+    last_cut = ((entry.size - 1) % CHUNK_SIZE) + 1
+    t0 = time.time()
+    fd = os.open(entry.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        async for chunk in streamer.yield_file(file_id, 0, 0, last_cut, part_count, CHUNK_SIZE,
+                                               source=source, prefetch=CACHE_PREFETCH):
+            await asyncio.to_thread(_write_all, fd, chunk)
+            entry.written += len(chunk)
+            async with entry.cond:
+                entry.cond.notify_all()
+            if entry.readers == 0 and time.time() - entry.last_active > CACHE_IDLE:
+                logger.warning(f"[CACHE] stopped {entry.key[:10]}: nobody is reading")
+                break
+        entry.done = entry.written >= entry.size
+        if entry.done:
+            took = max(time.time() - t0, 0.1)
+            logger.warning(f"[CACHE] done {entry.size / 1048576:.0f} MB in {took:.0f}s = {entry.size / 1048576 / took:.1f} MB/s")
+        else:
+            entry.failed = True
+    except asyncio.CancelledError:
+        entry.failed = True
+        raise
+    except Exception as e:
+        logger.warning(f"[CACHE] fill failed {entry.key[:10]}: {type(e).__name__} {e}")
+        entry.failed = True
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        async with entry.cond:
+            entry.cond.notify_all()
+
+
+def _cache_entry(streamer, file_id, source, size: int, start: int):
+    """Returns the cache entry that should serve this request, or None (= stream directly)."""
+    global _CACHE_TASK, _CACHE_PURGED
+    if not CACHE_ON or size < CACHE_MIN or size > CACHE_MAX:
+        return None
+    key = f"{file_id.unique_id}_{size}"
+    e = _CACHE.get(key)
+    if e is not None:
+        if e.failed:
+            if e.readers:
+                return None
+            _cache_remove(e)
+            e = None
+        elif e.done or start <= e.written + CACHE_WINDOW:
+            return e
+        else:
+            return None
+    if start > CACHE_WINDOW:
+        return None                      # seeking far into a new file: stream directly
+    try:
+        if not _CACHE_PURGED:
+            _CACHE_PURGED = True
+            shutil.rmtree(CACHE_DIR, ignore_errors=True)
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        if shutil.disk_usage(CACHE_DIR).free < size + CACHE_KEEP_FREE:
+            return None
+        while _cache_used() + size > CACHE_MAX:
+            old = [x for x in _CACHE.values() if x.done and x.readers == 0]
+            if not old:
+                return None
+            _cache_remove(min(old, key=lambda x: x.created))
+        e = _CacheEntry(key, os.path.join(CACHE_DIR, hashlib.md5(key.encode()).hexdigest()), size)
+        os.close(os.open(e.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600))   # exists before the first reader opens it
+    except OSError as ex:
+        logger.warning(f"[CACHE] disabled for this file: {ex}")
+        return None
+    _CACHE[key] = e
+    if _CACHE_TASK is None:
+        _CACHE_TASK = asyncio.ensure_future(_cache_cleaner())
+    logger.warning(f"[CACHE] start {size / 1048576:.0f} MB key={key[:10]}")
+    e.task = asyncio.ensure_future(_cache_fill(streamer, e, file_id, source))
+    return e
+
+
+async def _serve_cached(entry: _CacheEntry, response, start: int, end: int) -> int:
+    """Sends bytes start..end from the cache file. Returns the next byte not sent
+    (end + 1 when everything was sent); the caller streams the rest directly."""
+    pos = start
+    entry.readers += 1
+    try:
+        fd = os.open(entry.path, os.O_RDONLY)
+    except OSError:
+        entry.readers -= 1
+        return pos
+    try:
+        stalled = time.time()
+        while pos <= end:
+            entry.last_active = time.time()
+            avail = entry.written - pos
+            if avail <= 0:
+                if entry.done or entry.failed or time.time() - stalled > 60:
+                    return pos
+                async with entry.cond:
+                    try:
+                        await asyncio.wait_for(entry.cond.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        pass
+                continue
+            stalled = time.time()
+            n = min(end + 1 - pos, avail, 4 * CHUNK_SIZE)
+            data = await asyncio.to_thread(os.pread, fd, n, pos)
+            if not data:
+                return pos
+            await response.write(data)
+            pos += len(data)
+        return pos
+    finally:
+        entry.readers -= 1
+        entry.last_active = time.time()
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+async def _stream_direct(streamer, response, file_id, start: int, end: int, source):
+    offset = start - (start % CHUNK_SIZE)
+    first_part_cut = start - offset
+    part_count = math.ceil((end + 1) / CHUNK_SIZE) - (offset // CHUNK_SIZE)
+    last_part_cut = ((end % CHUNK_SIZE) + 1)
+    async for chunk in streamer.yield_file(file_id, offset, first_part_cut, last_part_cut, part_count, CHUNK_SIZE, source=source):
+        await response.write(chunk)
+
+
 async def stream_media(request: web.Request, chat_id: int, message_id: int, secure_hash: str) -> web.StreamResponse:
     streamer = get_streamer()
     file_id = await streamer.get_file_properties(chat_id, message_id)
@@ -764,19 +953,14 @@ async def stream_media(request: web.Request, chat_id: int, message_id: int, secu
     if request.method == "HEAD":
         return response
 
-    offset = start - (start % CHUNK_SIZE)
-    first_part_cut = start - offset
-    part_count = math.ceil((end + 1) / CHUNK_SIZE) - (offset // CHUNK_SIZE)
-
-    # Last chunk ke andar kitne bytes bhejne hain
-    last_part_cut = ((end % CHUNK_SIZE) + 1)
-
+    source = (chat_id, message_id)
     try:
-        async for chunk in streamer.yield_file(
-            file_id, offset, first_part_cut, last_part_cut, part_count, CHUNK_SIZE,
-            source=(chat_id, message_id),
-        ):
-            await response.write(chunk)
+        pos = start
+        entry = _cache_entry(streamer, file_id, source, file_size, start)
+        if entry is not None:
+            pos = await _serve_cached(entry, response, start, end)
+        if pos <= end:
+            await _stream_direct(streamer, response, file_id, pos, end, source)
     except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
         raise
     except Exception:
