@@ -161,8 +161,7 @@ def _menu_text(sc):
 def _menu_markup(sc):
     rows = [[InlineKeyboardButton("✅ In Use", callback_data="vpl_l:in_use:0"),
              InlineKeyboardButton("🟡 Spare", callback_data="vpl_l:spare:0")],
-            [InlineKeyboardButton("❌ Broken", callback_data="vpl_l:broken:0"),
-             InlineKeyboardButton("🔍 Search Link", callback_data="vpl_search")]]
+            [InlineKeyboardButton("❌ Broken", callback_data="vpl_l:broken:0")]]
     if sc["pending"]:
         rows.append([InlineKeyboardButton(f"🚚 Move All To Vplink ({len(sc['pending'])})", callback_data="vpl_move")])
     rows.append([InlineKeyboardButton("« Back", callback_data="adm_links"),
