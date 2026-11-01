@@ -41,6 +41,7 @@ PERMANENT_LINK_WORKER_URL = os.getenv("PERMANENT_LINK_WORKER_URL")
 PERMANENT_LINK_ADMIN_KEY = os.getenv("PERMANENT_LINK_ADMIN_KEY")
 
 links_col = db.db["permanent_links"]
+spare_col = db.db["vplink_spare_pool"]    # free vplink links, oldest first: a new domain link takes one of these instead of making a new one
 unused_col = db.db["unused_bot_links"]   # bot links made with "Bot Link Only" (and old ones kept) that no domain link uses
 
 
@@ -121,6 +122,36 @@ async def save_link(cache_key, share_link, permanent_link=None):
     return await get_saved_link(cache_key)
 
 
+async def sync_spare_pool(spare):
+    """Called by the Vplink Links panel after every scan: the pool is the panel's Spare list."""
+    docs = [{"_id": l["alias"], "short": l["short"], "order": i} for i, l in enumerate(spare)]
+    await spare_col.delete_many({})
+    if docs:
+        await spare_col.insert_many(docs)
+
+
+async def _claim_spare(destination):
+    """Takes the oldest free vplink link and points it at `destination`. Returns its record or None."""
+    if not shortsite.configured("vplink.in"):
+        return None
+    for _ in range(3):
+        doc = await spare_col.find_one_and_delete({}, sort=[("order", 1)])
+        if not doc:
+            return None
+        ok, why = await shortsite.set_destination_once(doc["short"], destination)
+        if ok:
+            return doc
+        print(f"SPARE LINK SKIPPED: {doc['_id']} ({why})")
+    return None
+
+
+async def _return_spare(doc):
+    try:
+        await spare_col.replace_one({"_id": doc["_id"]}, {**doc, "order": -1}, upsert=True)
+    except Exception as e:
+        print(f"SPARE LINK RETURN ERROR: {type(e).__name__}: {e}")
+
+
 async def create_permanent_link(destination):
     if not PERMANENT_LINK_WORKER_URL:
         print("PERMANENT LINK ERROR: Worker URL is missing")
@@ -140,13 +171,25 @@ async def create_permanent_link(destination):
         "X-Admin-Key": PERMANENT_LINK_ADMIN_KEY,
     }
 
+    # a free vplink link is reused when there is one; otherwise the Worker makes a new one
+    claimed = None
+    try:
+        claimed = await _claim_spare(destination)
+    except Exception as e:
+        print(f"SPARE LINK ERROR: {type(e).__name__}: {e}")
+    payload = {"destination": destination}
+    if claimed:
+        payload["shortUrl"] = claimed["short"]
+
+    result = None
+    used_spare = False
     try:
         timeout = aiohttp.ClientTimeout(total=30)
 
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
                 api_url,
-                json={"destination": destination},
+                json=payload,
                 headers=headers,
             ) as response:
                 response_text = await response.text()
@@ -157,21 +200,22 @@ async def create_permanent_link(destination):
                 )
 
                 if response.status != 200:
-                    return None
+                    pass
+                else:
+                    try:
+                        data = json.loads(response_text)
+                    except json.JSONDecodeError:
+                        print("PERMANENT LINK ERROR: Invalid JSON")
+                        data = {}
 
-                try:
-                    data = json.loads(response_text)
-                except json.JSONDecodeError:
-                    print("PERMANENT LINK ERROR: Invalid JSON")
-                    return None
+                    if data.get("success"):
+                        permanent_url = data.get("permanentUrl")
 
-                if data.get("success"):
-                    permanent_url = data.get("permanentUrl")
-
-                    if permanent_url:
-                        return permanent_url
-
-                print(f"PERMANENT LINK ERROR: {data}")
+                        if permanent_url:
+                            result = permanent_url
+                            used_spare = bool(claimed) and data.get("shortenedUrl") == claimed["short"]
+                    else:
+                        print(f"PERMANENT LINK ERROR: {data}")
 
     except Exception as e:
         print(
@@ -179,7 +223,9 @@ async def create_permanent_link(destination):
             f"{type(e).__name__}: {e}"
         )
 
-    return None
+    if claimed and not used_spare:
+        await _return_spare(claimed)      # not used (old Worker, existing link, or an error)
+    return result
 
 
 async def get_or_create_link(cache_key, share_link):
