@@ -21,6 +21,7 @@
 import asyncio
 import html
 import json
+import re
 import time
 
 import aiohttp
@@ -29,7 +30,10 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import ADMINS
 from Peter.utils import shortsite
-from plugins.genlink import PERMANENT_LINK_WORKER_URL, PERMANENT_LINK_ADMIN_KEY, bold, sync_spare_pool
+from plugins.genlink import (
+    PERMANENT_LINK_WORKER_URL, PERMANENT_LINK_ADMIN_KEY, bold, sync_spare_pool,
+    links_col, unused_col, spare_col,
+)
 
 HOST = "vplink.in"
 DOMAIN = "https://chillflizx.in/"
@@ -157,7 +161,8 @@ def _menu_text(sc):
 def _menu_markup(sc):
     rows = [[InlineKeyboardButton("✅ In Use", callback_data="vpl_l:in_use:0"),
              InlineKeyboardButton("🟡 Spare", callback_data="vpl_l:spare:0")],
-            [InlineKeyboardButton("❌ Broken", callback_data="vpl_l:broken:0")]]
+            [InlineKeyboardButton("❌ Broken", callback_data="vpl_l:broken:0"),
+             InlineKeyboardButton("🔍 Search Link", callback_data="vpl_search")]]
     if sc["pending"]:
         rows.append([InlineKeyboardButton(f"🚚 Move All To Vplink ({len(sc['pending'])})", callback_data="vpl_move")])
     rows.append([InlineKeyboardButton("« Back", callback_data="adm_links"),
@@ -207,7 +212,7 @@ def _item_view(kind, item, n):
     if kind == "spare":
         text = (bold("🟡 Spare Link\n\nNo Domain Link Uses It.") + f"\n\n{_code(item['short'])}\n"
                 + bold("Opens:") + f"\n{_code(item['dest'])}")
-        rows = [[InlineKeyboardButton("🙈 Hide From List", callback_data=f"vpl_hide:{n}")], [back]]
+        rows = [[InlineKeyboardButton("🙈 Hide From List", callback_data=f"vpl_hidea:{n}")], [back]]
     elif kind == "in_use":
         text = (bold("✅ In Use\n\nDomain Link:") + f"\n{_code(_domain(item['rec']))}\n"
                 + bold("Vplink:") + f"\n{_code(item['link']['short'])}\n"
@@ -255,7 +260,7 @@ async def _open(query, fresh=True):
             print(f"VPLINK SCAN ERROR: {type(e).__name__}: {e}")
             return await _edit(query, bold(f"❌ Could Not Check Vplink.\n{html.escape(why)}"),
                                InlineKeyboardMarkup([[InlineKeyboardButton("« Back", callback_data="adm_links")]]))
-        st = _STATE[query.from_user.id] = {"t": time.time(), "scan": sc}
+        st = _STATE[query.from_user.id] = {"t": time.time(), "scan": sc, "scanned": time.time()}
     st["t"] = time.time()
     await _edit(query, _menu_text(st["scan"]), _menu_markup(st["scan"]))
 
@@ -298,6 +303,21 @@ async def vpl_item(bot, query):
 
 # ---------------- hide / fix ----------------
 
+@Client.on_callback_query(filters.regex(r"^vpl_hidea:\d+$") & owner_only)
+async def vpl_hide_ask(bot, query):
+    st, n = _state(query), int(query.data.split(":")[1])
+    if not st or n >= len(st["scan"]["spare"]):
+        return await query.answer(EXPIRED, show_alert=True)
+    link = st["scan"]["spare"][n]
+    await query.answer()
+    await _edit(
+        query,
+        bold("🙈 Hide This Link?\n\nIt Leaves The List And Is Not Used For New Links.") + f"\n\n{_code(link['short'])}",
+        InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Hide", callback_data=f"vpl_hide:{n}"),
+                               InlineKeyboardButton("❌ Cancel", callback_data=f"vpl_i:spare:{n}")]]),
+    )
+
+
 @Client.on_callback_query(filters.regex(r"^vpl_hide:\d+$") & owner_only)
 async def vpl_hide(bot, query):
     st, n = _state(query), int(query.data.split(":")[1])
@@ -312,6 +332,10 @@ async def vpl_hide(bot, query):
         why = str(e) if isinstance(e, RuntimeError) else type(e).__name__
         return await query.answer(f"Could not hide: {why}", show_alert=True)
     st["scan"]["spare"].pop(n)
+    try:
+        await spare_col.delete_one({"_id": link["alias"]})     # a hidden link is not reused for new links
+    except Exception:
+        pass
     items = st["scan"]["spare"]
     await _edit(query, _list_text("spare", items), _list_markup("spare", items, min(n // PAGE, max(len(items) - 1, 0) // PAGE)))
 
@@ -517,3 +541,207 @@ async def vpl_stop(bot, query):
         return await query.answer("Nothing Is Running.", show_alert=True)
     run["stop"] = True
     await query.answer("Stopping After This Link...")
+
+
+# ---------------- search ----------------
+# Links -> Search Link (or Vplink Links -> Search Link): send a domain link, a vplink or a bot link
+# (or only its code) and the bot shows that link with the buttons to edit it.
+
+_SEARCH = {}        # owner id -> {"t", "prompt"}   (one search per tap, so normal messages are never caught)
+SCAN_KEEP = 120     # seconds a finished scan is reused by Search
+
+
+def _again_markup():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔍 Search Again", callback_data="vpl_search"),
+                                  InlineKeyboardButton("❌ Close", callback_data="lnk_close")]])
+
+
+@Client.on_callback_query(filters.regex(r"^vpl_search$") & owner_only)
+async def vpl_search(bot, query):
+    await query.answer()
+    uid = query.from_user.id
+    try:
+        from plugins.changelink import _FLOW
+        _FLOW.pop(uid, None)
+    except Exception:
+        pass
+    _SEARCH[uid] = {"t": time.time(), "prompt": query.message}
+    await _edit(
+        query,
+        bold("🔍 Search Link\n\nSend A Domain Link, Vplink Or Bot Link.\nThe Code Alone Also Works."),
+        InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="vpl_scancel")]]),
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^vpl_scancel$") & owner_only)
+async def vpl_search_cancel(bot, query):
+    _SEARCH.pop(query.from_user.id, None)
+    await query.answer("Cancelled.")
+    await _edit(query, bold("Cancelled."), None)
+
+
+def _param(url):
+    m = re.search(r"[?&]start=([A-Za-z0-9_-]+)", url or "")
+    return m.group(1) if m else None
+
+
+def _alias_of(url):
+    return (url or "").rstrip("/").rsplit("/", 1)[-1]
+
+
+def _parse(text):
+    t = (text or "").strip()
+    p = _param(t)
+    if p:
+        return "bot", p
+    m = re.fullmatch(r"(?:https?://)?([^\s/]+)/([A-Za-z0-9_-]+)/?", t)
+    if m:
+        host = m.group(1).lower()
+        if host.endswith(HOST):
+            return "vp", m.group(2)
+        if "chillflizx" in host:
+            return "domain", m.group(2)
+        return "any", m.group(2)
+    if re.fullmatch(r"[A-Za-z0-9_-]{2,40}", t):
+        return "any", t
+    return None, None
+
+
+def _find(sc, kind, code):
+    """(list name, index) of the first match in the scan, or (None, None)."""
+    tests = []
+    if kind in ("domain", "any"):
+        tests += [("in_use", lambda x: x["rec"]["key"] == code),
+                  ("broken", lambda x: x["rec"]["key"] == code),
+                  ("pending", lambda x: x["key"] == code)]
+    if kind in ("vp", "any"):
+        tests += [("in_use", lambda x: x["link"]["alias"] == code),
+                  ("spare", lambda x: x["alias"] == code),
+                  ("broken", lambda x: (x["link"] or {}).get("alias") == code
+                   or _alias_of(x["rec"].get("shortUrl")) == code)]
+    if kind == "bot":
+        tests += [("in_use", lambda x: _param(x["rec"]["destination"]) == code),
+                  ("broken", lambda x: _param(x["rec"]["destination"]) == code),
+                  ("pending", lambda x: _param(x["destination"]) == code)]
+    for name, test in tests:
+        for i, item in enumerate(sc[name]):
+            try:
+                if test(item):
+                    return name, i
+            except Exception:
+                pass
+    return None, None
+
+
+async def _scan_cached(uid):
+    st = _STATE.get(uid)
+    if st and time.time() - st.get("scanned", 0) < SCAN_KEEP:
+        st["t"] = time.time()
+        return st["scan"]
+    sc = await scan()
+    _STATE[uid] = {"t": time.time(), "scan": sc, "scanned": time.time()}
+    return sc
+
+
+async def _card(bot, name, idx, item):
+    from plugins.changelink import _describe_old, _exists
+    if name in ("spare", "broken"):
+        return _item_view(name, item, idx)
+    rec = item["rec"] if name == "in_use" else item
+    dest = rec["destination"]
+    status = "✅ In Use" if name == "in_use" else "🚚 On Another Shortener"
+    short = item["link"]["short"] if name == "in_use" else (rec.get("shortUrl") or "-")
+    label, log_id = await _describe_old(bot, dest)
+    alive = bool(log_id) and await _exists(bot, log_id)
+    text = (bold("🔍 Link Found\n\nDomain Link:") + f"\n{_code(_domain(rec))}\n"
+            + bold("Vplink:" if name == "in_use" else "Shortener:") + f"\n{_code(short)}\n"
+            + bold("Bot Link:") + f"\n{_code(dest)}\n"
+            + bold(f"Status: {status}\nContent: {html.escape(label) if alive else 'Empty'}"))
+    row = [InlineKeyboardButton("✏️ Change Link", callback_data=f"vpl_schange:{rec['key']}")]
+    if alive:
+        row.append(InlineKeyboardButton("🧹 Free It", callback_data=f"vpl_sfree:{rec['key']}"))
+    return text, InlineKeyboardMarkup([row, [InlineKeyboardButton("🔍 Search Again", callback_data="vpl_search"),
+                                             InlineKeyboardButton("« Back", callback_data="vpl_menu")]])
+
+
+async def _run_search(bot, user_id, prompt, text):
+    async def show(t, m=None):
+        try:
+            await prompt.edit_text(t, reply_markup=m)
+        except Exception:
+            pass
+
+    kind, code = _parse(text)
+    if not kind:
+        return await show(bold("❌ Send A Domain Link, Vplink Or Bot Link."), _again_markup())
+    await show(bold("⏳ Searching..."))
+    try:
+        sc = await _scan_cached(user_id)
+    except Exception as e:
+        why = str(e) if isinstance(e, RuntimeError) else type(e).__name__
+        print(f"VPLINK SEARCH ERROR: {type(e).__name__}: {e}")
+        return await show(bold(f"❌ Could Not Search.\n{html.escape(why)}"), _again_markup())
+    name, idx = _find(sc, kind, code)
+    if name is None and kind == "bot":
+        doc = await unused_col.find_one({"_id": code})
+        if doc:
+            return await show(bold("🤖 Unused Bot Link\n\nNo Domain Link Uses It.\n\n")
+                              + bold(f"Content: {html.escape(doc.get('label') or '-')}"), _again_markup())
+    if name is None:
+        return await show(bold("❌ Not Found.\n\nNo Vplink Or Domain Link Matches That."), _again_markup())
+    item = sc[name][idx]
+    try:
+        text_, markup = await _card(bot, name, idx, item)
+    except Exception as e:
+        print(f"VPLINK SEARCH CARD ERROR: {type(e).__name__}: {e}")
+        return await show(bold("❌ Could Not Show This Link. Try Again."), _again_markup())
+    await show(text_, markup)
+
+
+@Client.on_message(filters.private & filters.incoming & filters.text, group=-5)
+async def search_collect(bot, message):
+    user = message.from_user
+    st = _SEARCH.get(user.id) if user and user.id in ADMINS else None
+    if not st:
+        return
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        return                                   # commands still work
+    if time.time() - st["t"] > IDLE_SECONDS:
+        _SEARCH.pop(user.id, None)
+        return
+    try:
+        from plugins.changelink import _FLOW
+        flow = _FLOW.get(user.id)
+        if flow and flow.get("t", 0) >= st["t"]:  # another flow was opened after the search: it owns this message
+            _SEARCH.pop(user.id, None)
+            return
+    except Exception:
+        pass
+    _SEARCH.pop(user.id, None)
+    await _run_search(bot, user.id, st["prompt"], text)
+    message.stop_propagation()
+
+
+@Client.on_callback_query(filters.regex(r"^vpl_s(change|free):[A-Za-z0-9_-]+$") & owner_only)
+async def vpl_search_action(bot, query):
+    from plugins.changelink import _FLOW, _describe_old, _exists, _choose_view, _free_text, _free_markup
+    head, key = query.data.split(":", 1)
+    doc = await links_col.find_one({"permanent_url": {"$regex": f"/{re.escape(key)}/?$"}})
+    if not doc:
+        return await query.answer("This Link Is Not In The Database.", show_alert=True)
+    label, log_id = await _describe_old(bot, doc.get("share_link"))
+    state = {"t": time.time(), "prompt": query.message, "doc": doc, "key": key,
+             "old": {"label": label, "log_id": log_id}, "new": None}
+    if head == "vpl_sfree":
+        if not log_id or not await _exists(bot, log_id):
+            return await query.answer("This Link Is Already Empty.", show_alert=True)
+        state.update(step="fconfirm", mode="free")
+        text, markup = _free_text(state), _free_markup()
+    else:
+        state["step"] = "choose"
+        text, markup = _choose_view(label)
+    await query.answer()
+    _SEARCH.pop(query.from_user.id, None)
+    _FLOW[query.from_user.id] = state
+    await _edit(query, text, markup)
