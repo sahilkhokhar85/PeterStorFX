@@ -62,6 +62,7 @@ CACHE_IDLE = 90                                                          # stop 
 _CACHE: Dict[str, "_CacheEntry"] = {}
 _CACHE_TASK = None
 _CACHE_PURGED = False
+_NOCACHE: Dict[str, float] = {}      # files whose downloader opens many connections: streamed directly until this time
 
 # Logo shown at the top-left of the watch page (any public image link).
 LOGO_URL = "https://files.catbox.moe/3yc512.png"
@@ -808,6 +809,8 @@ def _cache_entry(streamer, file_id, source, size: int, start: int):
     if not CACHE_ON or size < CACHE_MIN or size > CACHE_MAX:
         return None
     key = f"{file_id.unique_id}_{size}"
+    if _NOCACHE.get(key, 0) > time.time():
+        return None
     e = _CACHE.get(key)
     if e is not None:
         if e.failed:
@@ -818,6 +821,12 @@ def _cache_entry(streamer, file_id, source, size: int, start: int):
         elif e.done or start <= e.written + CACHE_WINDOW:
             return e
         else:
+            # several connections reading different parts of the file: filling it from the start
+            # would only compete with them, so stop the fill and let everybody stream directly
+            logger.warning(f"[CACHE] stopped {key[:10]}: downloader uses many connections")
+            _NOCACHE[key] = time.time() + 1800
+            if e.task is not None:
+                e.task.cancel()
             return None
     if start > CACHE_WINDOW:
         return None                      # seeking far into a new file: stream directly
