@@ -29,7 +29,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import ADMINS
 from Peter.utils import shortsite
-from plugins.genlink import PERMANENT_LINK_WORKER_URL, PERMANENT_LINK_ADMIN_KEY, bold
+from plugins.genlink import PERMANENT_LINK_WORKER_URL, PERMANENT_LINK_ADMIN_KEY, bold, sync_spare_pool
 
 HOST = "vplink.in"
 DOMAIN = "https://chillflizx.in/"
@@ -130,7 +130,12 @@ async def scan():
     async with shortsite.Session(HOST) as s:
         vp = await s.all_links()
     records = await worker_records()
-    return classify(vp, records)
+    res = classify(vp, records)
+    try:
+        await sync_spare_pool(res["spare"])      # new domain links reuse these
+    except Exception as e:
+        print(f"SPARE POOL SYNC ERROR: {type(e).__name__}: {e}")
+    return res
 
 
 # ---------------- texts / buttons ----------------
