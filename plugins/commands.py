@@ -21,6 +21,10 @@ from config import *
 import re
 import json
 import base64
+import secrets
+import time
+from contextvars import ContextVar
+from datetime import datetime, timedelta, timezone
 logger = logging.getLogger(__name__)
 
 BATCH_FILES = {}
@@ -204,6 +208,55 @@ async def _report_worker():
 _BG_TASKS = set()
 
 
+# ---------------- Get Again ----------------
+# After the auto-delete the notice gets a "Get Again" button that sends the same content again
+# (no shortener needed, the link itself is never shown). Valid GET_AGAIN_HOURS, at most
+# GET_AGAIN_MAX times per delivery.
+GET_AGAIN_MAX = 2
+GET_AGAIN_HOURS = 24
+_REPLAY = ContextVar("get_again_token", default=None)
+_AGAIN_INDEX = False
+_OPEN_TXT = "🔗 Once Deleted, You’ll Need to Open the Link Again to Access It.\n\n"
+_AGAIN_TXT = "🔁 Once Deleted, Tap Get Again To Receive It Again (Within 24 Hours).\n\n"
+
+
+def _again_col():
+    return db.db["get_again"]
+
+
+async def _again_token(user_id, data):
+    """Token of this delivery's Get Again button, or None (limit reached / database problem)."""
+    global _AGAIN_INDEX
+    try:
+        if not _AGAIN_INDEX:
+            _AGAIN_INDEX = True
+            await _again_col().create_index("exp", expireAfterSeconds=0)
+        tok = _REPLAY.get()
+        if tok:
+            doc = await _again_col().find_one({"_id": tok})
+            return tok if doc and doc.get("uses", 0) < GET_AGAIN_MAX else None
+        tok = secrets.token_urlsafe(6)
+        await _again_col().insert_one({
+            "_id": tok, "user": int(user_id), "data": data, "uses": 0,
+            "exp": datetime.now(timezone.utc) + timedelta(hours=GET_AGAIN_HOURS),
+        })
+        return tok
+    except Exception as e:
+        logger.warning(f"[GETAGAIN] token error: {type(e).__name__}: {e}")
+        return None
+
+
+class _Replay:
+    """Looks like the user's /start message, so the normal delivery code can run again."""
+    def __init__(self, query, data):
+        self._msg = query.message
+        self.from_user = query.from_user
+        self.command = ["start", data]
+
+    def __getattr__(self, name):
+        return getattr(self._msg, name)
+
+
 def _spawn(coro):
     task = asyncio.create_task(coro)
     _BG_TASKS.add(task)
@@ -211,7 +264,7 @@ def _spawn(coro):
     return task
 
 
-async def _delete_batch_later(delay, filesarr, notice):
+async def _delete_batch_later(delay, filesarr, notice, again=None):
     """Auto-delete a delivered batch after `delay` seconds. Runs as a background
     task so the /start handler (and its Pyrogram worker) is freed immediately
     instead of sleeping for the whole auto-delete time. The job is also saved in
@@ -221,17 +274,21 @@ async def _delete_batch_later(delay, filesarr, notice):
         notice._client, delay, notice.chat.id,
         [x.id for x in filesarr if x],
         notice.id,
-        "<b>Your All Files/Videos Are Successfully Deleted !!</b>",
+        "<b>Your All Files/Videos Are Successfully Deleted !!</b>"
+        + ("\n\n<b>🔁 Tap Get Again To Receive Them Again.</b>" if again else ""),
+        again,
     )
 
 
-async def _delete_single_later(delay, del_msg, notice):
+async def _delete_single_later(delay, del_msg, notice, again=None):
     """Same as above, for a single delivered file."""
     await run_delete(
         notice._client, delay, notice.chat.id,
         [del_msg.id],
         notice.id,
-        "<b>Your File/Video Is Successfully Deleted !!</b>",
+        "<b>Your File/Video Is Successfully Deleted !!</b>"
+        + ("\n\n<b>🔁 Tap Get Again To Receive It Again.</b>" if again else ""),
+        again,
     )
 
 
@@ -337,12 +394,14 @@ async def start(client, message):
                     if settings.get("auto_delete", True):
                         del_minutes = max(1, settings.get("auto_delete_time", 1800) // 60)
 
+                        tok = await _again_token(message.from_user.id, data)
+
                         k = await client.send_message(
                             chat_id=message.from_user.id,
                             text=f"<b>🔔 Just a Quick Reminder !!\n\n"
                             f"⏳ This Content Will Be Automatically Deleted After <u>{del_minutes} Minutes</u> Due to Copyright Issues.\n\n"
                             + (f"⚡ Fast Download & Watch Links Stay Valid For <u>{STREAM_LINK_HOURS} Hours</u>.\n\n" if STREAM_MODE else "") +
-                            f"🔗 Once Deleted, You’ll Need to Open the Link Again to Access It.\n\n"
+                            (_AGAIN_TXT if tok else _OPEN_TXT) +
                             f"📌 Want to Keep It? Save or Forward It to your Saved Messages Before It Expires. 👍\n\n"
                             f"❤️ Save It Now, Enjoy It Later! 💫\n\n"
                             f"👨‍💻 Powered By @ChillFlizX⚡️\n\n"
@@ -353,7 +412,8 @@ async def start(client, message):
                             _delete_single_later(
                                 settings.get("auto_delete_time", 1800),
                                 del_msg,
-                                k
+                                k,
+                                tok
                             )
                         )
 
@@ -562,18 +622,19 @@ async def start(client, message):
         await sts.delete()
         if settings.get("auto_delete", True):
             del_minutes = max(1, settings.get("auto_delete_time", 1800) // 60)
+            tok = await _again_token(message.from_user.id, data)
             k = await client.send_message(
                 chat_id = message.from_user.id,
                 text=f"<b>🔔 Just a Quick Reminder !!\n\n"
                 f"⏳ This Content Will Be Automatically Deleted After <u>{del_minutes} Minutes</u> Due to Copyright Issues.\n\n"
                             + (f"⚡ Fast Download & Watch Links Stay Valid For <u>{STREAM_LINK_HOURS} Hours</u>.\n\n" if STREAM_MODE else "") +
-                f"🔗 Once Deleted, You’ll Need to Open the Link Again to Access It.\n\n"
+                (_AGAIN_TXT if tok else _OPEN_TXT) +
                 f"📌 Want to Keep It? Save or Forward It to your Saved Messages Before It Expires. 👍\n\n"
                 f"❤️ Save It Now, Enjoy It Later! 💫\n\n"
                 f"👨‍💻 Powered By @ChillFlizX⚡️\n\n"
                 f"🧑‍🔧 Help & Support >>> @ChillFlizOwnerBot</b>"
             )
-            _spawn(_delete_batch_later(settings.get("auto_delete_time", 1800), filesarr, k))
+            _spawn(_delete_batch_later(settings.get("auto_delete_time", 1800), filesarr, k, tok))
         return
 
 
@@ -748,18 +809,19 @@ async def start(client, message):
             pass
         if settings.get("auto_delete", True):
             del_minutes = max(1, settings.get("auto_delete_time", 1800) // 60)
+            tok = await _again_token(message.from_user.id, data)
             k = await client.send_message(
                 chat_id = message.from_user.id,
                 text=f"<b>🔔 Just a Quick Reminder !!\n\n"
                 f"⏳ This Content Will Be Automatically Deleted After <u>{del_minutes} Minutes</u> Due to Copyright Issues.\n\n"
                             + (f"⚡ Fast Download & Watch Links Stay Valid For <u>{STREAM_LINK_HOURS} Hours</u>.\n\n" if STREAM_MODE else "") +
-                f"🔗 Once Deleted, You’ll Need to Open the Link Again to Access It.\n\n"
+                (_AGAIN_TXT if tok else _OPEN_TXT) +
                 f"📌 Want to Keep It? Save or Forward It to your Saved Messages Before It Expires. 👍\n\n"
                 f"❤️ Save It Now, Enjoy It Later! 💫\n\n"
                 f"👨‍💻 Powered By @ChillFlizX⚡️\n\n"
                 f"🧑‍🔧 Help & Support >>> @ChillFlizOwnerBot</b>"
             )
-            _spawn(_delete_single_later(settings.get("auto_delete_time", 1800), del_msg, k))
+            _spawn(_delete_single_later(settings.get("auto_delete_time", 1800), del_msg, k, tok))
         return
     except Exception as e:
         logger.error(f"Failed to deliver file for decode_file_id={decode_file_id}: {e}")
@@ -840,3 +902,25 @@ async def cb_handler(client: Client, query: CallbackQuery):
             reply_markup=reply_markup,
             parse_mode=enums.ParseMode.HTML
         )
+
+
+@Client.on_callback_query(filters.regex(r"^gagain:[A-Za-z0-9_-]+$"))
+async def get_again(client, query):
+    tok = query.data.split(":", 1)[1]
+    try:
+        doc = await _again_col().find_one_and_update(
+            {"_id": tok, "user": query.from_user.id, "uses": {"$lt": GET_AGAIN_MAX},
+             "exp": {"$gt": datetime.now(timezone.utc)}},
+            {"$inc": {"uses": 1}},
+        )
+    except Exception as e:
+        logger.warning(f"[GETAGAIN] error: {type(e).__name__}: {e}")
+        doc = None
+    if not doc:
+        return await query.answer("⏰ Link Expired. Open The Original Link Again.", show_alert=True)
+    await query.answer("Sending...")
+    ctx = _REPLAY.set(tok)
+    try:
+        await start(client, _Replay(query, doc["data"]))
+    finally:
+        _REPLAY.reset(ctx)
