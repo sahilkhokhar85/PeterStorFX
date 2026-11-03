@@ -9,7 +9,7 @@ from pyrogram.errors import ChatAdminRequired, FloodWait
 from pyrogram.types import *
 from plugins.settings_db import get_settings
 from plugins.force_sub import not_joined_channels, force_sub_join_buttons, get_missing_and_buttons
-from Peter.server.streamer import build_stream_urls
+from Peter.server.streamer import build_stream_urls, STREAM_LINK_HOURS
 from Peter.utils.cover_copy import copy_keep_cover as _copy_media
 from Peter.utils.pending_deletes import run_delete
 try:
@@ -341,6 +341,7 @@ async def start(client, message):
                             chat_id=message.from_user.id,
                             text=f"<b>🔔 Just a Quick Reminder !!\n\n"
                             f"⏳ This Content Will Be Automatically Deleted After <u>{del_minutes} Minutes</u> Due to Copyright Issues.\n\n"
+                            + (f"⚡ Fast Download & Watch Links Stay Valid For <u>{STREAM_LINK_HOURS} Hours</u>.\n\n" if STREAM_MODE else "") +
                             f"🔗 Once Deleted, You’ll Need to Open the Link Again to Access It.\n\n"
                             f"📌 Want to Keep It? Save or Forward It to your Saved Messages Before It Expires. 👍\n\n"
                             f"❤️ Save It Now, Enjoy It Later! 💫\n\n"
@@ -565,6 +566,7 @@ async def start(client, message):
                 chat_id = message.from_user.id,
                 text=f"<b>🔔 Just a Quick Reminder !!\n\n"
                 f"⏳ This Content Will Be Automatically Deleted After <u>{del_minutes} Minutes</u> Due to Copyright Issues.\n\n"
+                            + (f"⚡ Fast Download & Watch Links Stay Valid For <u>{STREAM_LINK_HOURS} Hours</u>.\n\n" if STREAM_MODE else "") +
                 f"🔗 Once Deleted, You’ll Need to Open the Link Again to Access It.\n\n"
                 f"📌 Want to Keep It? Save or Forward It to your Saved Messages Before It Expires. 👍\n\n"
                 f"❤️ Save It Now, Enjoy It Later! 💫\n\n"
@@ -750,6 +752,7 @@ async def start(client, message):
                 chat_id = message.from_user.id,
                 text=f"<b>🔔 Just a Quick Reminder !!\n\n"
                 f"⏳ This Content Will Be Automatically Deleted After <u>{del_minutes} Minutes</u> Due to Copyright Issues.\n\n"
+                            + (f"⚡ Fast Download & Watch Links Stay Valid For <u>{STREAM_LINK_HOURS} Hours</u>.\n\n" if STREAM_MODE else "") +
                 f"🔗 Once Deleted, You’ll Need to Open the Link Again to Access It.\n\n"
                 f"📌 Want to Keep It? Save or Forward It to your Saved Messages Before It Expires. 👍\n\n"
                 f"❤️ Save It Now, Enjoy It Later! 💫\n\n"
