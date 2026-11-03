@@ -275,7 +275,8 @@ async def _delete_batch_later(delay, filesarr, notice, again=None):
         [x.id for x in filesarr if x],
         notice.id,
         "<b>Your All Files/Videos Are Successfully Deleted !!</b>"
-        + ("\n\n<b>🔁 Tap Get Again To Receive Them Again.</b>" if again else ""),
+        + ("\n\n<b>🔁 Tap Get Again To Receive Them Again.</b>" if again
+           else "\n\n<b>🔗 Open The Original Link Again To Get Them.</b>"),
         again,
     )
 
@@ -287,7 +288,8 @@ async def _delete_single_later(delay, del_msg, notice, again=None):
         [del_msg.id],
         notice.id,
         "<b>Your File/Video Is Successfully Deleted !!</b>"
-        + ("\n\n<b>🔁 Tap Get Again To Receive It Again.</b>" if again else ""),
+        + ("\n\n<b>🔁 Tap Get Again To Receive It Again.</b>" if again
+           else "\n\n<b>🔗 Open The Original Link Again To Get It.</b>"),
         again,
     )
 
