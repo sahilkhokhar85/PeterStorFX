@@ -52,6 +52,7 @@ PREFETCH = 6   # parts asked from Telegram at the same time (3 MB in flight per 
 # ---- disk cache: the file is pulled from Telegram into a temporary file and served from there ----
 CACHE_ON = os.getenv("STREAM_CACHE", "1") != "0"
 CACHE_DIR = os.getenv("STREAM_CACHE_DIR", "/tmp/stream_cache")
+STREAM_LINK_HOURS = 24                                                   # fast download / watch links stop working after this
 CACHE_TTL = 24 * 3600                                                    # a cached file lives 24 hours
 CACHE_MAX = int(float(os.getenv("STREAM_CACHE_GB", "10")) * 1024 ** 3)   # total cache size per bot
 CACHE_MIN = int(float(os.getenv("STREAM_CACHE_MIN_MB", "8")) * 1024 ** 2)  # smaller files are streamed directly
@@ -73,7 +74,7 @@ class StreamFileNotFound(Exception):
 
 
 class InvalidStreamHash(Exception):
-    message = "Invalid or expired link."
+    message = "Invalid or expired link. Open the bot link again to get a new one."
 
 
 def _secret() -> bytes:
@@ -88,23 +89,26 @@ def _sign(payload: str) -> str:
 
 
 def encode_stream_token(chat_id: int, message_id: int, user_id: int) -> str:
-    """Signed link token: chat:msg:user + HMAC. The links do not expire, but they
-    are tied to the user they were made for, so the web server can refuse a
-    banned user and nobody can forge a link for another user or file."""
-    raw_token = f"{chat_id}:{message_id}:{int(user_id)}".encode("ascii")
+    """Signed link token: chat:msg:user:expiry + HMAC. The link works for STREAM_LINK_HOURS
+    (24 hours), is tied to the user it was made for (so the web server can refuse a banned
+    user) and nobody can forge or extend a link."""
+    expires = int(time.time()) + STREAM_LINK_HOURS * 3600
+    raw_token = f"{chat_id}:{message_id}:{int(user_id)}:{expires}".encode("ascii")
     payload = base64.urlsafe_b64encode(raw_token).decode("ascii").rstrip("=")
     return f"{payload}.{_sign(payload)}"
 
 
 def decode_stream_token(token: str) -> Tuple[int, int, int]:
-    """Returns (chat_id, message_id, user_id). Raises InvalidStreamHash for a
-    forged, tampered or old-format token."""
+    """Returns (chat_id, message_id, user_id). Raises InvalidStreamHash for a forged,
+    tampered, old-format or expired token."""
     try:
         payload, _, sig = token.partition(".")
         if not payload or not sig or not hmac.compare_digest(sig, _sign(payload)):
             raise InvalidStreamHash
         padded = payload + "=" * (-len(payload) % 4)
-        chat_s, msg_s, uid_s = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii").split(":", 2)
+        chat_s, msg_s, uid_s, exp_s = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii").split(":", 3)
+        if int(exp_s) < time.time():
+            raise InvalidStreamHash
         return int(chat_s), int(msg_s), int(uid_s)
     except InvalidStreamHash:
         raise
