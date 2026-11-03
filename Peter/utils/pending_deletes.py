@@ -14,6 +14,7 @@ import logging
 import time
 
 from pyrogram.errors import FloodWait
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from config import BOT_ID
 from plugins.dbusers import db
 
@@ -56,12 +57,15 @@ async def _execute(client, entry):
     async with _SEM:
         await _delete_messages(client, entry["chat_id"], entry["ids"])
         if entry.get("notice_id"):
+            markup = None
+            if entry.get("again"):      # "Get Again" button: the deleted notice offers the content once more
+                markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔁 Get Again", callback_data=f"gagain:{entry['again']}")]])
             try:
-                await client.edit_message_text(entry["chat_id"], entry["notice_id"], entry["notice_text"])
+                await client.edit_message_text(entry["chat_id"], entry["notice_id"], entry["notice_text"], reply_markup=markup)
             except FloodWait as e:
                 await asyncio.sleep(int(e.value) + 1)
                 try:
-                    await client.edit_message_text(entry["chat_id"], entry["notice_id"], entry["notice_text"])
+                    await client.edit_message_text(entry["chat_id"], entry["notice_id"], entry["notice_text"], reply_markup=markup)
                 except Exception:
                     pass
             except Exception:
@@ -73,7 +77,7 @@ async def _execute(client, entry):
             logger.warning(f"[AUTODEL] couldn't remove finished entry: {type(e).__name__}: {e}")
 
 
-async def run_delete(client, delay, chat_id, ids, notice_id, notice_text):
+async def run_delete(client, delay, chat_id, ids, notice_id, notice_text, again=None):
     """Called when files are delivered: save the job in MongoDB, wait, then delete.
     If MongoDB is unreachable the delete still happens (in memory only)."""
     entry = {
@@ -82,6 +86,7 @@ async def run_delete(client, delay, chat_id, ids, notice_id, notice_text):
         "ids": [int(i) for i in ids],
         "notice_id": int(notice_id) if notice_id else None,
         "notice_text": notice_text,
+        "again": again,
         "delete_at": time.time() + delay,
     }
     try:
