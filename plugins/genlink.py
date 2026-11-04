@@ -22,6 +22,8 @@ from pyrogram.errors.exceptions.bad_request_400 import (
 
 from config import (
     ADMINS,
+    API_ID,
+    API_HASH,
     LOG_CHANNEL,
     WEBSITE_URL,
     WEBSITE_URL_MODE,
@@ -31,6 +33,7 @@ from plugins.admins_db import is_admin
 from plugins.dbusers import db
 from Peter.utils.cover_copy import copy_keep_cover
 from Peter.utils import shortsite
+from Peter.utils import store_user
 
 
 # ============================================================
@@ -1154,11 +1157,23 @@ async def manual_done(bot, query):
         # Same fast way as the range method: the messages are forwarded to the log channel up to
         # 100 per request (one call instead of one per file), checked, and copied one by one only
         # if a forward did not come out clean.
-        src_chat = query.message.chat.id
-        sources = [{"channel_id": src_chat, "msg_id": m.id} for m in msgs]
-        originals = {m.id: m for m in msgs}
-        saved, _kept = await copy_batch_to_log(bot, sources, originals, panel)
-        outlist = [e for e in saved if e["channel_id"] == LOG_CHANNEL]
+        outlist = []
+        if store_user.enabled():
+            async def _prog(n, total):
+                try:
+                    await panel.edit_text(bold(
+                        "⏳ Saving files to the database channel...\n\n"
+                        f"Done: {n}/{total}"))
+                except Exception:
+                    pass
+            outlist = await store_user.forward_for_bot(
+                API_ID, API_HASH, bot.me.username, LOG_CHANNEL, msgs, _content_id, FORWARD_CHUNK, _prog) or []
+        if not outlist:
+            src_chat = query.message.chat.id
+            sources = [{"channel_id": src_chat, "msg_id": m.id} for m in msgs]
+            originals = {m.id: m for m in msgs}
+            saved, _kept = await copy_batch_to_log(bot, sources, originals, panel)
+            outlist = [e for e in saved if e["channel_id"] == LOG_CHANNEL]
         failed = len(msgs) - len(outlist)
         if not outlist:
             _MANUAL.pop(uid, None)
