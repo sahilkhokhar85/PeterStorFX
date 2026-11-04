@@ -1151,20 +1151,15 @@ async def manual_done(bot, query):
     msgs = [state["items"][k] for k in sorted(state["items"])]   # message ids grow in sending order
     outlist, failed = [], 0
     try:
-        for i, m in enumerate(msgs, 1):
-            copy = await _copy_one(bot, m)
-            if copy:
-                outlist.append({"channel_id": LOG_CHANNEL, "msg_id": copy.id})
-            else:
-                failed += 1
-            if i % 10 == 0 or i == len(msgs):
-                try:
-                    await panel.edit_text(bold(
-                        "⏳ Saving the messages to the database channel...\n\n"
-                        f"Done: {i}/{len(msgs)}"
-                    ))
-                except Exception:
-                    pass
+        # Same fast way as the range method: the messages are forwarded to the log channel up to
+        # 100 per request (one call instead of one per file), checked, and copied one by one only
+        # if a forward did not come out clean.
+        src_chat = query.message.chat.id
+        sources = [{"channel_id": src_chat, "msg_id": m.id} for m in msgs]
+        originals = {m.id: m for m in msgs}
+        saved, _kept = await copy_batch_to_log(bot, sources, originals, panel)
+        outlist = [e for e in saved if e["channel_id"] == LOG_CHANNEL]
+        failed = len(msgs) - len(outlist)
         if not outlist:
             _MANUAL.pop(uid, None)
             if state["on_cancel"]:
