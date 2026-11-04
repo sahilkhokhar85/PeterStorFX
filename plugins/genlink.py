@@ -889,6 +889,21 @@ async def _copy_one(bot, original):
             return None
 
 
+async def send_batch_json(bot, filename):
+    """Sends the Batch.json file to the log channel. A FloodWait (Telegram asks to wait, usually
+    after many files were just saved) is waited out and retried instead of failing the batch."""
+    for attempt in range(8):
+        try:
+            return await bot.send_document(
+                LOG_CHANNEL, filename, file_name="Batch.json",
+                caption=bold("⚠️ Batch Generated For Filestore."),
+            )
+        except FloodWait as e:
+            if attempt == 7:
+                raise
+            await asyncio.sleep(int(e.value) + 1)
+
+
 async def copy_batch_to_log(bot, outlist, originals, status):
     """Copy every batch message into LOG_CHANNEL. Returns (new_outlist, kept)
     where `kept` counts messages that could not be copied (they keep pointing
@@ -1175,10 +1190,7 @@ async def _finish_manual_batch(bot, admin_id, state, outlist, failed):
     try:
         with open(filename, "w", encoding="utf-8") as out:
             json.dump(outlist, out)
-        post = await bot.send_document(
-            LOG_CHANNEL, filename, file_name="Batch.json",
-            caption=bold("⚠️ Batch Generated For Filestore."),
-        )
+        post = await send_batch_json(bot, filename)
     finally:
         if os.path.exists(filename):
             os.remove(filename)
@@ -1369,12 +1381,7 @@ async def _range_batch(bot, message, user):
             with open(filename, "w", encoding="utf-8") as out:
                 json.dump(outlist, out)
 
-            post = await bot.send_document(
-                LOG_CHANNEL,
-                filename,
-                file_name="Batch.json",
-                caption=bold("⚠️ Batch Generated For Filestore."),
-            )
+            post = await send_batch_json(bot, filename)
 
         finally:
             if os.path.exists(filename):
