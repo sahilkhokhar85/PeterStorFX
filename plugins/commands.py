@@ -294,8 +294,44 @@ async def _delete_single_later(delay, del_msg, notice, again=None):
     )
 
 
+class _Status:
+    """The "Fetching" message. Every method is safe to call, even when it is already deleted."""
+    def __init__(self, msg=None):
+        self.msg = msg
+
+    async def delete(self):
+        msg, self.msg = self.msg, None
+        if msg is not None:
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+
+    async def edit(self, *args, **kwargs):
+        if self.msg is not None:
+            try:
+                await self.msg.edit(*args, **kwargs)
+            except Exception:
+                pass
+
+
 @Client.on_message(filters.command("start") & filters.incoming)
 async def start(client, message):
+    """The "Fetching" message goes out first, before any database or channel check, so a
+    link answers at once. It is removed when the reply (or the delivery) is done."""
+    sts = _Status()
+    if len(message.command) == 2:
+        try:
+            sts = _Status(await message.reply("<b>⏳ Fetching Your Content, Please Wait...</b>"))
+        except Exception:
+            pass
+    try:
+        await _start_inner(client, message, sts)
+    finally:
+        await sts.delete()
+
+
+async def _start_inner(client, message, sts):
     username = client.me.username
     user_doc = await db.get_user(message.from_user.id)
     if not user_doc:
@@ -366,7 +402,6 @@ async def start(client, message):
         file_id = data
         pre = ""
     if data.split("-", 1)[0] == "BATCH":
-        sts = await message.reply("<b>⏳ Fetching Your Content, Please Wait...</b>")
         file_id = data.split("-", 1)[1]
         msgs = BATCH_FILES.get(file_id)
         if not msgs:
