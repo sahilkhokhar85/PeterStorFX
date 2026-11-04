@@ -130,6 +130,29 @@ async def sync_spare_pool(spare):
         await spare_col.insert_many(docs)
 
 
+SPARE_REFRESH_GAP = 1800        # seconds: the empty pool is refreshed at most this often (all bots together)
+_REFRESH_TASKS = set()
+
+
+async def _refresh_pool():
+    """The pool is empty: look at vplink once (in the background) for links that became free,
+    e.g. after a domain link was deleted. Same scan as the Vplink Links panel, which refills the pool."""
+    try:
+        from pymongo.errors import DuplicateKeyError
+        meta = db.db["vplink_spare_meta"]
+        now = time.time()
+        got = await meta.find_one_and_update({"_id": "refresh", "t": {"$lt": now - SPARE_REFRESH_GAP}}, {"$set": {"t": now}})
+        if not got:
+            try:
+                await meta.insert_one({"_id": "refresh", "t": now})     # the very first time
+            except DuplicateKeyError:
+                return                                                   # refreshed lately (or another bot is doing it)
+        from plugins.vplink_panel import scan
+        await scan()
+    except Exception as e:
+        print(f"SPARE POOL REFRESH ERROR: {type(e).__name__}: {e}")
+
+
 async def _claim_spare(destination):
     """Takes the oldest free vplink link and points it at `destination`. Returns its record or None."""
     if not shortsite.configured("vplink.in"):
@@ -137,6 +160,9 @@ async def _claim_spare(destination):
     for _ in range(3):
         doc = await spare_col.find_one_and_delete({}, sort=[("order", 1)])
         if not doc:
+            task = asyncio.ensure_future(_refresh_pool())      # this link gets a new vplink; the next ones may reuse
+            _REFRESH_TASKS.add(task)
+            task.add_done_callback(_REFRESH_TASKS.discard)
             return None
         ok, why = await shortsite.set_destination_once(doc["short"], destination)
         if ok:
