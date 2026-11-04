@@ -39,7 +39,7 @@ from plugins.genlink import (
     bold, encode_start, make_file_share_link, get_message_cache_key,
     get_media_unique_id, _extract_batch_ref, fetch_batch_messages,
     copy_batch_to_log, _file_info, _human_size, post_links_to_log,
-    method_markup, start_manual, unused_col,
+    method_markup, start_manual, unused_col, send_batch_json,
 )
 
 IDLE_SECONDS = 600
@@ -503,10 +503,7 @@ async def _build_batch(bot, admin_id, state, chat_id, first_id, last_id, cache_k
         try:
             with open(filename, "w", encoding="utf-8") as out:
                 json.dump(outlist, out)
-            post = await bot.send_document(
-                LOG_CHANNEL, filename, file_name="Batch.json",
-                caption=bold("⚠️ Batch Generated For Filestore."),
-            )
+            post = await send_batch_json(bot, filename)
         finally:
             if os.path.exists(filename):
                 os.remove(filename)
@@ -535,10 +532,7 @@ async def _finish_manual(bot, admin_id, state, outlist, failed):
     try:
         with open(filename, "w", encoding="utf-8") as out:
             json.dump(outlist, out)
-        post = await bot.send_document(
-            LOG_CHANNEL, filename, file_name="Batch.json",
-            caption=bold("⚠️ Batch Generated For Filestore."),
-        )
+        post = await send_batch_json(bot, filename)
     finally:
         if os.path.exists(filename):
             os.remove(filename)
