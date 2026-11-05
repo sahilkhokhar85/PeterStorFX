@@ -145,7 +145,8 @@ async def _pin(client, user_id, msg, batch=None):
         except FloodWait as e:
             await asyncio.sleep(e.value + 1)
             continue
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[PIN] user {user_id} message {msg.id}: {type(e).__name__}: {e}")
             return False
         if batch:
             try:
