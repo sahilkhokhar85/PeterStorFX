@@ -66,42 +66,176 @@ def _to_units(msgs):
 async def _deliver_unit(client, user_id, unit):
     """Send one message, or one whole album, to user_id as a copy (no 'Forwarded from')."""
     if len(unit) == 1:
-        await unit[0].copy(chat_id=user_id)
-    else:
-        await client.forward_messages(
-            chat_id=user_id,
-            from_chat_id=unit[0].chat.id,
-            message_ids=[m.id for m in unit],
-            drop_author=True,
-        )
+        return await unit[0].copy(chat_id=user_id)
+    res = await client.forward_messages(
+        chat_id=user_id,
+        from_chat_id=unit[0].chat.id,
+        message_ids=[m.id for m in unit],
+        drop_author=True,
+    )
+    return res[0] if isinstance(res, list) and res else res
 
 
-async def broadcast_messages(client, user_id, units):
-    """Send every unit to one user, in order. A FloodWait retries only the unit
-    that was waiting, so nothing is sent twice."""
+# ---------------- Pinned messages (so a chosen pin can be removed again with /unpin) ----------------
+# A "batch" is one broadcast / /send that pinned a message; every pinned copy is one record
+# (batch, user_id, message_id, bot_id). Records are deleted as soon as they are unpinned.
+
+FLOOD_RETRIES = 5
+
+
+def _pin_batches():
+    return db.db.pin_batches
+
+
+def _pin_records():
+    return db.db.pin_records
+
+
+async def add_pin_record(batch_id, user_id, message_id):
+    await _pin_records().insert_one(
+        {"batch": batch_id, "user_id": int(user_id), "message_id": message_id, "bot_id": BOT_ID})
+
+
+async def list_pin_batches(user_id=None, limit=10):
+    """Newest first: [{_id, t, snippet, n}] where n = how many users of THIS bot still have that pin."""
+    query = {"bot_id": BOT_ID}
+    if user_id:
+        query["user_id"] = int(user_id)
+    ids = await _pin_records().distinct("batch", query)
+    out = []
+    async for doc in _pin_batches().find({"_id": {"$in": ids}}).sort("t", -1).limit(limit):
+        doc["n"] = await _pin_records().count_documents({**query, "batch": doc["_id"]})
+        out.append(doc)
+    return out
+
+
+async def get_pin_records(batch_ids, user_id=None):
+    query = {"bot_id": BOT_ID, "batch": {"$in": list(batch_ids)}}
+    if user_id:
+        query["user_id"] = int(user_id)
+    return [d async for d in _pin_records().find(query)]
+
+
+async def delete_pin_records(record_ids):
+    if record_ids:
+        await _pin_records().delete_many({"_id": {"$in": list(record_ids)}})
+
+
+async def delete_pin_records_for_users(user_ids):
+    if user_ids:
+        await _pin_records().delete_many({"bot_id": BOT_ID, "user_id": {"$in": [int(u) for u in user_ids]}})
+
+
+async def prune_pin_batches():
+    """Removes batches that have no pinned copy left (a batch younger than 10 minutes may still be filling up)."""
+    old = datetime.datetime.utcnow() - datetime.timedelta(minutes=10)
+    async for doc in _pin_batches().find({"t": {"$lt": old}}, {"_id": 1}):
+        if not await _pin_records().count_documents({"batch": doc["_id"]}, limit=1):
+            await _pin_batches().delete_one({"_id": doc["_id"]})
+
+
+async def _pin(client, user_id, msg, batch=None):
+    """Pins an already sent message in the user's chat (both sides, no extra notification) and remembers it
+    (batch) so /unpin can remove it later. A failed pin never fails the delivery."""
+    if msg is None:
+        return False
+    for _ in range(FLOOD_RETRIES):
+        try:
+            await client.pin_chat_message(user_id, msg.id, disable_notification=True, both_sides=True)
+        except FloodWait as e:
+            await asyncio.sleep(e.value + 1)
+            continue
+        except Exception:
+            return False
+        if batch:
+            try:
+                await add_pin_record(batch, int(user_id), msg.id)
+            except Exception:
+                pass   # the pin worked; only the memory of it is missing
+        return True
+    return False
+
+
+_KIND = (("photo", "[Photo]"), ("video", "[Video]"), ("animation", "[GIF]"), ("sticker", "[Sticker]"),
+         ("voice", "[Voice]"), ("audio", "[Audio]"), ("video_note", "[Video Note]"), ("document", "[File]"))
+
+
+def _snippet(msg):
+    """Short label of a message for the /unpin list."""
+    text = " ".join(str(getattr(msg, "text", None) or getattr(msg, "caption", None) or "").split())
+    if text:
+        return text if len(text) <= 30 else text[:30] + "…"
+    for attr, label in _KIND:
+        if getattr(msg, attr, None):
+            return label
+    return "[Message]"
+
+
+async def _new_batch(units, pin, admin):
+    """Starts the pin memory: one batch per pinned message, so /unpin can take them down one by one.
+    Returns {message index: batch id}. Never raises (no memory = pins still work)."""
+    batches = {}
+    for i in pin or ():
+        try:
+            batch = secrets.token_hex(4)
+            await _pin_batches().insert_one({
+                "_id": batch, "t": datetime.datetime.utcnow(), "snippet": _snippet(units[i][0]),
+                "admin": getattr(admin, "id", admin),
+            })
+            batches[i] = batch
+        except Exception:
+            pass
+    return batches
+
+
+async def _end_batch(batch):
+    if batch:
+        try:
+            await prune_pin_batches()
+        except Exception:
+            pass
+
+
+async def _deliver_with_retry(client, user_id, unit):
+    """One unit, FloodWait waited out. Only the unit that waited is retried, so nothing is sent twice."""
+    retries = 0
+    while True:
+        try:
+            return await _deliver_unit(client, user_id, unit)
+        except FloodWait as e:
+            retries += 1
+            if retries > FLOOD_RETRIES * 4:
+                raise
+            await asyncio.sleep(e.value)
+
+
+async def broadcast_messages(client, user_id, units, pin=None, batch=None):
+    """Send every unit to one user, in order. `pin` = indexes of the units to pin (or None).
+    A FloodWait retries only the unit that was waiting, so nothing is sent twice.
+    Returns (ok, reason, pinned): pinned = every chosen message was pinned."""
+    pinned = False
+    pins_ok = []
     try:
-        for unit in units:
-            while True:
-                try:
-                    await _deliver_unit(client, user_id, unit)
-                    break
-                except FloodWait as e:
-                    await asyncio.sleep(e.value)
-        return True, "Success"
+        for i, unit in enumerate(units):
+            sent = await _deliver_with_retry(client, user_id, unit)
+            if pin and i in pin:
+                pins_ok.append(await _pin(client, user_id, sent, (batch or {}).get(i)))
+                pinned = all(pins_ok)
+        return True, "Success", pinned
     except InputUserDeactivated:
         await db.delete_user_unless_banned(int(user_id))
-        return False, "Deleted"
+        return False, "Deleted", pinned
     except UserIsBlocked:
         await db.delete_user_unless_banned(int(user_id))
-        return False, "Blocked"
+        return False, "Blocked", pinned
     except PeerIdInvalid:
         # NOTE: PeerIdInvalid does NOT mean the user blocked/deleted the bot.
         # It usually means the bot's local peer cache doesn't have this user yet
         # (common after a redeploy on Railway/Koyeb/Render). Deleting the user
         # here was wrongly shrinking the user count after every broadcast.
-        return False, "Error"
+        return False, "Error", pinned
     except Exception:
-        return False, "Error"
+        return False, "Error", pinned
 
 
 async def _target_user_ids():
@@ -185,8 +319,41 @@ def _users(n):
     return "User" if n == 1 else "Users"
 
 
+def _pin_name(n, pin):
+    """What the 'Pin' line shows (pin = chosen message numbers, 0-based)."""
+    chosen = sorted(pin or ())
+    if n == 1:
+        return "ON" if chosen else "OFF"
+    if not chosen:
+        return "None"
+    return ("Message " if len(chosen) == 1 else "Messages ") + ", ".join(str(i + 1) for i in chosen)
+
+
+def _preview_text(job):
+    n = len(job["units"])
+    pin_lines = ["", f"📌 Pin: {_pin_name(n, job.get('pin'))}"]
+    if n > 1:
+        pin_lines += ["", "👇 📌 Pins A Message"]
+    pin_html = "\n".join("" if not l else f"<b>{l}</b>" for l in pin_lines)
+    return job["head"] + "\n" + pin_html + "\n\n<b>⚠️ Check Once — Sending can't be undone.</b>"
+
+
+def _preview_markup(token, job):
+    n = len(job["units"])
+    pin = job.get("pin") or set()
+    if n == 1:
+        rows = [[InlineKeyboardButton(f"📌 Pin: {_pin_name(n, pin)}", callback_data=f"bc_pin:{token}:0")]]
+    else:
+        nums = [InlineKeyboardButton(("✅ " if i in pin else "📌 ") + str(i + 1),
+                                     callback_data=f"bc_pin:{token}:{i}") for i in range(n)]
+        rows = [nums[i:i + 5] for i in range(0, len(nums), 5)]
+    rows.append([InlineKeyboardButton(label, callback_data=f"{cb}:{token}") for label, cb in job["buttons"]])
+    rows.append([InlineKeyboardButton("❌ Cancel", callback_data=f"bc_no:{token}")])
+    return InlineKeyboardMarkup(rows)
+
+
 async def _make_preview(bot, admin_id, chat_id, units, target=None):
-    """Show the admin exactly what will be sent (in order), then Confirm / Cancel."""
+    """Show the admin exactly what will be sent (in order), then Pin / Confirm / Cancel."""
     try:
         for unit in units:
             await _deliver_unit(bot, chat_id, unit)   # the very same code the real broadcast uses
@@ -200,23 +367,22 @@ async def _make_preview(bot, admin_id, chat_id, units, target=None):
 
     _clean_old_jobs()
     token = secrets.token_hex(4)
-    _JOBS[token] = {"admin": admin_id, "units": units, "target": target, "t": time.time()}
+    job = {"admin": admin_id, "units": units, "target": target, "t": time.time(), "pin": set()}
+    _JOBS[token] = job
     n = len(units)
     what = "1 Message" if n == 1 and len(units[0]) == 1 else (
         f"1 Album · {len(units[0])} Items" if n == 1 else f"{n} Messages (In Order)")
-    cancel = [InlineKeyboardButton("❌ Cancel", callback_data=f"bc_no:{token}")]
     if target:
-        text = (
+        job["head"] = (
             "<b>👆 SEND PREVIEW !!</b>\n\n"
             f"<b>📦 Content: {what}</b>\n\n"
-            f"<b>👤 User:</b> {await _user_label(bot, target)} <b>only</b>\n\n"
-            "<b>⚠️ Check Once — Sending can't be undone.</b>"
+            f"<b>👤 User:</b> {await _user_label(bot, target)} <b>only</b>\n"
         )
-        buttons = [InlineKeyboardButton("✅ Confirm Send", callback_data=f"bc_yes:{token}")]
-        return await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup([buttons, cancel]))
+        job["buttons"] = [("✅ Confirm Send", "bc_yes")]
+        return await bot.send_message(chat_id, _preview_text(job), reply_markup=_preview_markup(token, job))
 
     mine = len(await _target_user_ids())
-    buttons = [InlineKeyboardButton("✅ This Bot Only", callback_data=f"bc_yes:{token}")]
+    job["buttons"] = [("✅ This Bot Only", "bc_yes")]
     try:
         online, offline = await _online_bots()
     except Exception:
@@ -238,11 +404,10 @@ async def _make_preview(bot, admin_id, chat_id, units, target=None):
             rows.append(f"⛔ @{html.escape(str(d.get('username') or d['_id']))} – Offline (Skipped)")
         lines.append(f"📣 All Bots: {total} {_users(total)} ({len(online)} online)")
         lines += ["", "🤖 ONLINE BOTS !!", ""] + rows
-        buttons.append(InlineKeyboardButton(f"📣 All Bots ({len(online)})", callback_data=f"bc_all:{token}"))
-    lines += ["", "⚠️ Check Once — Sending can't be undone."]
+        job["buttons"].append((f"📣 All Bots ({len(online)})", "bc_all"))
     # the whole message is bold (empty lines stay empty)
-    text = "\n".join(f"<b>{l}</b>" if l else "" for l in lines)
-    await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup([buttons, cancel]))
+    job["head"] = "\n".join(f"<b>{l}</b>" if l else "" for l in lines)
+    await bot.send_message(chat_id, _preview_text(job), reply_markup=_preview_markup(token, job))
 
 
 def _reset_waiting(admin_id):
@@ -436,6 +601,32 @@ async def collect_buttons(bot, query):
     await _make_preview(bot, user_id, chat_id, _to_units(state["msgs"]), state.get("target"))
 
 
+@Client.on_callback_query(filters.regex(r"^bc_pin:[0-9a-f]{8}:\d{1,3}$") & dynamic_admin_filter("can_broadcast"))
+async def pin_choice(bot, query):
+    """Pin button(s) under the preview: pick the messages to pin, as many as you like (tap again to remove)."""
+    _, token, idx = query.data.split(":")
+    job = _JOBS.get(token)
+    if not job:
+        await query.answer("This preview expired. Run /broadcast again.", show_alert=True)
+        try:
+            await query.message.edit_text("<b>⌛ Preview Expired. Run /broadcast Again.</b>")
+        except Exception:
+            pass
+        return
+    if job["admin"] != query.from_user.id:
+        return await query.answer("This broadcast belongs to another admin.", show_alert=True)
+    idx = int(idx)
+    if idx >= len(job["units"]):
+        return await query.answer()
+    job["pin"] = set(job.get("pin") or ()) ^ {idx}
+    job["t"] = time.time()
+    await query.answer("Pin ON" if idx in job["pin"] else "Pin OFF")
+    try:
+        await query.message.edit_text(_preview_text(job), reply_markup=_preview_markup(token, job))
+    except Exception:
+        pass
+
+
 @Client.on_callback_query(filters.regex(r"^bc_(yes|all|no):[0-9a-f]{8}$") & dynamic_admin_filter("can_broadcast"))
 async def broadcast_answer(bot, query):
     action, _, token = query.data.partition(":")
@@ -467,34 +658,35 @@ async def broadcast_answer(bot, query):
             return await query.answer("An all-bots broadcast is already running. Wait for it to finish.", show_alert=True)
         _JOBS.pop(token, None)   # one confirm = one broadcast
         await query.answer("Preparing...")
-        return await _start_all_job(bot, query.message, job["units"])
+        return await _start_all_job(bot, query.message, job["units"], sorted(job.get("pin") or ()) or None, query.from_user)
 
     if job.get("target"):
         _JOBS.pop(token, None)   # one confirm = one send
         await query.answer("Sending...")
-        return await _run_direct(bot, query.message, job["target"], job["units"])
+        return await _run_direct(bot, query.message, job["target"], job["units"], query.from_user,
+                                 sorted(job.get("pin") or ()) or None)
 
     if _RUN_LOCK.locked():
         return await query.answer("A broadcast is already running. Wait for it to finish.", show_alert=True)
 
     _JOBS.pop(token, None)   # one confirm = one broadcast (a second tap finds nothing)
     await query.answer("Broadcasting...")
-    await _run_broadcast(bot, query.message, job["units"])
+    await _run_broadcast(bot, query.message, job["units"], sorted(job.get("pin") or ()) or None, query.from_user)
 
 
-async def _run_direct(bot, sts, user_id, units):
+async def _run_direct(bot, sts, user_id, units, admin=None, pin=None):
     """Send to one user and tell the admin exactly what happened."""
     await sts.edit_text("<b>Sending...</b>")
     sent = 0
+    pins_ok = []
+    pinned = False
+    batch = await _new_batch(units, pin, admin)
     try:
-        for unit in units:
-            while True:
-                try:
-                    await _deliver_unit(bot, user_id, unit)
-                    break
-                except FloodWait as e:
-                    await asyncio.sleep(e.value)
+        for i, unit in enumerate(units):
+            first = await _deliver_with_retry(bot, user_id, unit)
             sent += 1
+            if pin and i in pin:
+                pins_ok.append(await _pin(bot, user_id, first, batch.get(i)))
     except UserIsBlocked:
         reason = "That User Has Blocked The Bot."
     except InputUserDeactivated:
@@ -504,26 +696,35 @@ async def _run_direct(bot, sts, user_id, units):
     except Exception as e:
         reason = f"Failed ({type(e).__name__})."
     else:
-        return await sts.edit_text(f"<b>✅ Sent To User</b> <code>{user_id}</code><b>. ({sent} Message(s))</b>")
+        text = f"<b>✅ Sent To User</b> <code>{user_id}</code><b>. ({sent} Message(s))</b>"
+        if pin:
+            pinned = all(pins_ok) and len(pins_ok) == len(pin)
+            text += "\n<b>📌 Pinned</b>" if pinned else (
+                "\n<b>⚠️ Couldn't Pin Everything.</b>" if len(pin) > 1 else "\n<b>⚠️ Couldn't Pin The Message.</b>")
+        await sts.edit_text(text)
+        return await _end_batch(batch)
     await sts.edit_text(
         f"<b>❌ Not Sent To User</b> <code>{user_id}</code>\n<b>{reason}</b>\n"
         f"Delivered Before The Error: {sent} Of {len(units)}"
     )
+    await _end_batch(batch)
 
 
-async def _send_all(bot, user_ids, units, on_progress=None, every=20):
+async def _send_all(bot, user_ids, units, on_progress=None, every=20, pin=None, batch=None):
     """Send `units` to every id in user_ids (CONCURRENCY at a time) and return the counts.
     on_progress(counts) is awaited every `every` finished users."""
-    counts = {"done": 0, "success": 0, "blocked": 0, "deleted": 0, "failed": 0}
+    counts = {"done": 0, "success": 0, "blocked": 0, "deleted": 0, "failed": 0, "pinned": 0}
     sem = asyncio.Semaphore(CONCURRENCY)
 
     async def _send(uid):
         async with sem:
-            return await broadcast_messages(bot, uid, units)
+            return await broadcast_messages(bot, uid, units, pin, batch)
 
     tasks = [asyncio.create_task(_send(uid)) for uid in user_ids]
     for coro in asyncio.as_completed(tasks):
-        ok, reason = await coro
+        ok, reason, pinned = await coro
+        if pinned:
+            counts["pinned"] += 1
         if ok:
             counts["success"] += 1
         elif reason == "Blocked":
@@ -541,8 +742,9 @@ async def _send_all(bot, user_ids, units, on_progress=None, every=20):
     return counts
 
 
-def _bot_text(c, total, final, secs):
+def _bot_text(c, total, final, secs, pin=None):
     ok = int(c["success"] * 100 / total) if total else 0
+    pin_line = [f"📌 Pinned: {c.get('pinned', 0)}"] if pin is not None else []
     return _bold([
         "✅ BROADCAST COMPLETED !!" if final else "📣 BROADCASTING…",
         "",
@@ -555,21 +757,24 @@ def _bot_text(c, total, final, secs):
         f"🚫 Blocked: {c['blocked']}",
         f"🗑 Deleted: {c['deleted']}",
         f"❌ Failed: {c['failed']}",
+        *pin_line,
     ])
 
 
-async def _run_broadcast(bot, sts, units):
+async def _run_broadcast(bot, sts, units, pin=None, admin=None):
     async with _RUN_LOCK:
         user_ids = await _target_user_ids()
         start_time = time.time()
         total_users = len(user_ids)
         await sts.edit_text("<b>📣 BROADCASTING…</b>")
+        batch = await _new_batch(units, pin, admin)
 
         async def _progress(c):
-            await sts.edit_text(_bot_text(c, total_users, False, time.time() - start_time))
+            await sts.edit_text(_bot_text(c, total_users, False, time.time() - start_time, pin))
 
-        c = await _send_all(bot, user_ids, units, _progress)
-        await sts.edit_text(_bot_text(c, total_users, True, time.time() - start_time))
+        c = await _send_all(bot, user_ids, units, _progress, pin=pin, batch=batch)
+        await sts.edit_text(_bot_text(c, total_users, True, time.time() - start_time, pin))
+        await _end_batch(batch)
 
 
 # ======================================================================
@@ -593,7 +798,7 @@ POLL_EVERY = 4
 CLAIM_WAIT = 600         # a bot that did not take its part within this time is skipped
 STALL_AFTER = 300        # a running part that reported nothing for this long counts as lost
 WATCH_EVERY = 3
-_ZERO = {"total": 0, "done": 0, "success": 0, "blocked": 0, "deleted": 0, "failed": 0}
+_ZERO = {"total": 0, "done": 0, "success": 0, "blocked": 0, "deleted": 0, "failed": 0, "pinned": 0}
 
 
 def _jobs():
@@ -657,13 +862,14 @@ async def _stage_units(bot, units):
     return staged
 
 
-async def _start_all_job(bot, sts, units):
+async def _start_all_job(bot, sts, units, pin=None, admin=None):
     try:
         online, _ = await _online_bots()
         if not online:
             return await sts.edit_text("<b>❌ No Bot Is Online Right Now. Try Again In A Minute.</b>")
         await sts.edit_text("<b>📦 Preparing The Broadcast For All Bots...</b>")
         staged = await _stage_units(bot, units)
+        batch = await _new_batch(units, pin, admin)
     except Exception as e:
         logger.error(f"[ALLBOTS] could not start: {type(e).__name__}: {e}")
         return await sts.edit_text(f"<b>❌ Could Not Start The Broadcast.</b>\n<code>{type(e).__name__}</code>")
@@ -679,6 +885,8 @@ async def _start_all_job(bot, sts, units):
         await _jobs().insert_one({
             "_id": token, "created": now, "status": "running", "origin_bot": BOT_ID,
             "stage_chat": STAGE_CHAT, "units": staged, "parts": parts,
+            "pin": list(pin) if pin else None,
+            "batches": {str(i): b for i, b in batch.items()},
         })
     except Exception as e:
         logger.error(f"[ALLBOTS] could not save the job: {type(e).__name__}: {e}")
@@ -768,6 +976,8 @@ def _all_text(job, final, detail=True):
         f"🗑 Deleted: {total['deleted']}",
         f"❌ Failed: {total['failed']}",
     ]
+    if job.get("pin"):
+        lines.append(f"📌 Pinned: {total['pinned']}")
     if issues and not detail:
         bad = sum(1 for p in parts if p["state"] in ("skipped", "lost", "failed"))
         lines += ["", f"⚠️ {bad} Bot(s) Did Not Finish — Tap Bot-wise"]
@@ -881,7 +1091,9 @@ async def _run_part(client, job):
             async def _progress(c):
                 await _save(c)
 
-            counts = await _send_all(client, user_ids, units, _progress, every=25)
+            pin = set(job.get("pin") or ()) or None
+            batch = {int(k): v for k, v in (job.get("batches") or {}).items()}
+            counts = await _send_all(client, user_ids, units, _progress, every=25, pin=pin, batch=batch)
             await _save(counts, state="done", total=total)
     except Exception as e:
         logger.error(f"[ALLBOTS] part failed: {type(e).__name__}: {e}")
