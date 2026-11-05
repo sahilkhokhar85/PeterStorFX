@@ -1081,13 +1081,13 @@ async def _unpin_panel(state):
         pass
 
 
-async def start_manual(user, panel, finish, on_cancel=None, ask_type=False):
+async def start_manual(user, panel, finish, on_cancel=None, ask_type=False, clean_button=False):
     """Open the one-by-one collector. `panel` is the bot message that shows the counter;
     `finish(bot, admin_id, state, outlist, failed)` is called after Done."""
     _MANUAL[user.id] = {
         "items": {}, "panel": panel, "t": time.time(), "busy": False, "user": user,
         "finish": finish, "on_cancel": on_cancel, "shown": 0, "task": None,
-        "ask_type": ask_type, "bot_only": False, "pinned": False,
+        "ask_type": ask_type, "bot_only": False, "pinned": False, "clean_button": clean_button,
     }
     try:
         await panel.edit_text(_manual_text(0), reply_markup=_manual_markup())
@@ -1139,6 +1139,35 @@ async def manual_collect(bot, message):
     return message.stop_propagation()
 
 
+_CLEAN = {}   # (chat id, link message id) -> {"ids": [messages the admin sent to the bot]}
+
+
+def _clear_markup():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Done", callback_data="bm_clear")]])
+
+
+@Client.on_callback_query(filters.regex(r"^bm_clear$") & filters.create(allowed))
+async def manual_clear(bot, query):
+    """Done under the link message: unpin it and remove the messages that were sent to the bot
+    (they are already saved in the log channel). Nothing in any channel is touched."""
+    m = query.message
+    info = _CLEAN.pop((m.chat.id, m.id), None)
+    await query.answer()
+    try:
+        await bot.unpin_chat_message(m.chat.id, m.id, both_sides=True)
+    except Exception:
+        pass
+    try:
+        await m.edit_reply_markup(None)
+    except Exception:
+        pass
+    for i in range(0, len((info or {}).get("ids", [])), 100):
+        try:
+            await bot.delete_messages(m.chat.id, info["ids"][i:i + 100])
+        except Exception as e:
+            print(f"BATCH CLEAR ERROR: {type(e).__name__}: {e}")
+
+
 @Client.on_callback_query(filters.regex(r"^bm_cancel$") & filters.create(allowed))
 async def manual_cancel(bot, query):
     state = _MANUAL.get(query.from_user.id)
@@ -1167,12 +1196,12 @@ async def manual_done(bot, query):
         return await query.answer("Send At Least One Message First.", show_alert=True)
     state["busy"] = True
     await query.answer()
-    await _unpin_panel(state)
     panel = state["panel"]
     if state.get("ask_type"):
         choice, _shown = await ask_link_type(bot, query.message.chat.id, uid, panel=panel)
         if choice == "no":
             _MANUAL.pop(uid, None)
+            await _unpin_panel(state)
             if state["on_cancel"]:
                 state["on_cancel"]()
             try:
@@ -1207,14 +1236,22 @@ async def manual_done(bot, query):
         failed = len(msgs) - len(outlist)
         if not outlist:
             _MANUAL.pop(uid, None)
+            await _unpin_panel(state)
             if state["on_cancel"]:
                 state["on_cancel"]()
             return await panel.edit_text(bold("❌ Could Not Save Any Of The Messages. Nothing Was Created."))
         _MANUAL.pop(uid, None)
+        if state.get("clean_button"):
+            # the link message gets a Done button: it unpins and clears the messages sent to the bot
+            _CLEAN[(panel.chat.id, panel.id)] = {"ids": [m.id for m in msgs]}
         await state["finish"](bot, uid, state, outlist, failed)
+        if not state.get("clean_button"):
+            await _unpin_panel(state)
     except Exception as e:
         traceback.print_exc()
         _MANUAL.pop(uid, None)
+        _CLEAN.pop((panel.chat.id, panel.id), None)
+        await _unpin_panel(state)
         if state["on_cancel"]:
             state["on_cancel"]()
         try:
@@ -1252,7 +1289,7 @@ async def _finish_manual_batch(bot, admin_id, state, outlist, failed):
          "<b>📺 Source: Sent One By One</b>"],
         permanent_link, share_link,
     )
-    await panel.edit_text(final_text)
+    await panel.edit_text(final_text, reply_markup=_clear_markup() if state.get("clean_button") else None)
 
 
 @Client.on_message(
@@ -1269,7 +1306,7 @@ async def gen_link_batch(bot, message):
 @Client.on_callback_query(filters.regex(r"^bm_manual$") & filters.create(allowed))
 async def batch_method_manual(bot, query):
     await query.answer()
-    await start_manual(query.from_user, query.message, _finish_manual_batch, ask_type=True)
+    await start_manual(query.from_user, query.message, _finish_manual_batch, ask_type=True, clean_button=True)
 
 
 @Client.on_callback_query(filters.regex(r"^bm_range$") & filters.create(allowed))
