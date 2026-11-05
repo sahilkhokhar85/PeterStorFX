@@ -43,9 +43,12 @@ IMAP_HOST = os.environ.get("IMAP_HOST", "imap.gmail.com").strip()
 IMAP_PORT = int(os.environ.get("IMAP_PORT", "993") or 993)
 SENDER = os.environ.get("IMAP_SENDER_FILTER", "no-reply@famapp.in").strip()
 EXPIRY_MIN = int(os.environ.get("PAY_EXPIRY_MINUTES", "10") or 10)
-POLL_SECONDS = 20
+POLL_SECONDS = 5
 LOOKBACK_HOURS = 6
 IST = pytz.timezone("Asia/Kolkata")
+
+# Owner-only test plan (₹1, 1 day): shown only to the ADMINS, never to users
+TEST_PLAN = {"_id": "test", "name": "Test (1 Day)", "days": 1, "price": 1}
 
 # first start only; edit them later from the admin panel (step 2) or directly in MongoDB
 DEFAULT_PLANS = [
@@ -135,6 +138,9 @@ def _text_of(msg):
     return re.sub(r"[ \t ]+", " ", "\n".join(parts))
 
 
+_SEEN = {}   # mail number -> parsed payment (or None): a mail is downloaded only once
+
+
 def _fetch_payments():
     """Blocking: the recent incoming FamX payments [{utr, amount, ts (naive UTC), name}] from Gmail."""
     since = (datetime.datetime.utcnow() - datetime.timedelta(hours=LOOKBACK_HOURS)).strftime("%d-%b-%Y")
@@ -146,6 +152,10 @@ def _fetch_payments():
         status, data = cli.search(None, "FROM", SENDER, "SINCE", since)
         ids = data[0].split() if status == "OK" and data and data[0] else []
         for num in ids[-40:]:
+            if num in _SEEN:
+                if _SEEN[num]:
+                    out.append(_SEEN[num])
+                continue
             st, fetched = cli.fetch(num, "(BODY.PEEK[])")
             if st != "OK":
                 continue
@@ -156,8 +166,10 @@ def _fetch_payments():
             subject = str(msg.get("Subject", ""))
             body = _text_of(msg)
             if _OUT.search(subject) or _OUT.search(body):
+                _SEEN[num] = None
                 continue
             if not (_IN_SUBJECT.search(subject) and _IN_BODY.search(body)):
+                _SEEN[num] = None
                 continue
             m = _AMOUNT.search(subject) or _AMOUNT.search(body)
             u = _UTR.search(body)
@@ -170,8 +182,10 @@ def _fetch_payments():
             except (InvalidOperation, ValueError, TypeError):
                 continue
             who = _FROM.search(body)
-            out.append({"utr": u.group(1), "amount": amount, "ts": ts,
-                        "name": (who.group(1).strip() if who else "")})
+            pay = {"utr": u.group(1), "amount": amount, "ts": ts,
+                   "name": (who.group(1).strip() if who else "")}
+            _SEEN[num] = pay
+            out.append(pay)
     finally:
         try:
             cli.logout()
@@ -181,10 +195,20 @@ def _fetch_payments():
 
 
 # ---------------------------------------------------------------- QR
-def _qr_png(amount, order):
-    import qrcode
-    uri = "upi://pay?" + urlencode(
+def _upi_uri(amount, order):
+    return "upi://pay?" + urlencode(
         {"pa": UPI_ID, "pn": PAYEE, "am": _rupees(amount), "cu": "INR", "tn": f"PREM{order}"}, quote_via=quote)
+
+
+def _qr_png(amount, order):
+    """The payment card (Peter/assets/pay_template.jpg with this order's QR); a plain QR if that fails."""
+    uri = _upi_uri(amount, order)
+    try:
+        from Peter.utils.payqr import make_card
+        return make_card(uri, f"Pay ₹{_rupees(amount)}")
+    except Exception as e:
+        logger.warning(f"[PREMIUM] card failed, sending a plain QR: {type(e).__name__}: {e}")
+    import qrcode
     qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=12, border=4)
     qr.add_data(uri)
     qr.make(fit=True)
@@ -200,7 +224,6 @@ def _order_caption(plan_name, amount):
     return (
         f"<b>💎 Premium — {plan_name}</b>\n\n"
         f"<b>💰 Amount: ₹{_rupees(amount)}</b>\n"
-        f"<b>🆔 UPI ID:</b> <code>{UPI_ID}</code>\n"
         f"<b>⏳ Valid For: {EXPIRY_MIN} Minutes</b>\n\n"
         f"<b>Scan The QR And Pay Exactly ₹{_rupees(amount)}.</b>\n"
         "<b>Premium Starts Automatically After The Payment.</b>"
@@ -214,8 +237,10 @@ def _order_markup(oid):
     ])
 
 
-async def _plan_markup():
+async def _plan_markup(user_id=None):
     plans = await get_plans()
+    if user_id in ADMINS:
+        plans = plans + [TEST_PLAN]
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(f"💎 {p['name']} — ₹{_rupees(p['price'])}", callback_data=f"prem_plan:{p['_id']}")]
         for p in plans
@@ -233,7 +258,7 @@ async def _home_text(user_id):
 async def premium_cmd(bot, message):
     if not enabled():
         return await message.reply_text("<b>Premium Is Not Available Right Now.</b>")
-    await message.reply_text(await _home_text(message.from_user.id), reply_markup=await _plan_markup())
+    await message.reply_text(await _home_text(message.from_user.id), reply_markup=await _plan_markup(message.from_user.id))
 
 
 @Client.on_callback_query(filters.regex(r"^prem_plan:[0-9A-Za-z_-]{1,20}$"))
@@ -241,7 +266,8 @@ async def plan_chosen(bot, query):
     if not enabled():
         return await query.answer("Premium Is Not Available Right Now.", show_alert=True)
     uid = query.from_user.id
-    plan = await _plans_col().find_one({"_id": query.data.split(":", 1)[1]})
+    plan_id = query.data.split(":", 1)[1]
+    plan = TEST_PLAN if (plan_id == "test" and uid in ADMINS) else await _plans_col().find_one({"_id": plan_id})
     if not plan:
         return await query.answer("This Plan Is No Longer Available.", show_alert=True)
     now = _now()
@@ -310,7 +336,7 @@ async def check_order(bot, query):
     if order["status"] != "pending":
         return await query.answer("This Order Is Closed.", show_alert=True)
     import time
-    if time.time() - _LAST_CHECK.get(oid, 0) < 8:
+    if time.time() - _LAST_CHECK.get(oid, 0) < 3:
         return await query.answer("Checking... Please Wait A Few Seconds.")
     _LAST_CHECK[oid] = time.time()
     await query.answer("Checking Your Payment...")
