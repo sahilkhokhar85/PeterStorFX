@@ -1,6 +1,6 @@
 from pyrogram.errors import InputUserDeactivated, UserNotParticipant, FloodWait, UserIsBlocked, PeerIdInvalid
 from plugins.dbusers import db
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from config import ADMINS, BOT_ID, REPORT_CHANNEL
 from plugins.admins_db import dynamic_admin_filter
@@ -115,6 +115,50 @@ def _clean_old_jobs():
     now = time.time()
     for token in [t for t, j in _JOBS.items() if now - j["t"] > JOB_LIFETIME]:
         _JOBS.pop(token, None)
+
+
+async def _can_message(bot, uid):
+    """None when a message can reach this user, else why not (checked with an invisible 'typing' action)."""
+    try:
+        await bot.send_chat_action(uid, enums.ChatAction.TYPING)
+    except UserIsBlocked:
+        return "That User Has Blocked The Bot."
+    except InputUserDeactivated:
+        return "That Account Is Deleted."
+    except PeerIdInvalid:
+        return "The Bot Can't Find This User. Check The ID. The User Must Have Started The Bot."
+    except Exception:
+        return None   # can't tell (flood wait, network): let the normal flow try
+    return None
+
+
+@Client.on_raw_update(group=3)
+async def bot_stopped_update(client, update, users, chats):
+    """A user blocked / unblocked the bot: Telegram tells the bot at once ("UpdateBotStopped"). Reported to
+    the report channel."""
+    if type(update).__name__ != "UpdateBotStopped":
+        return
+    try:
+        uid = update.user_id
+        stopped = bool(update.stopped)
+        raw = (users or {}).get(uid)
+        name = (getattr(raw, "first_name", None) or "").strip() if raw is not None else ""
+        uname = (getattr(raw, "username", None) or "") if raw is not None else ""
+        if not name:
+            doc = await db.col.find_one({"id": int(uid)})
+            name = str((doc or {}).get("name") or "").strip()
+        lines = [
+            "<b>🚫 #BotBlocked</b>" if stopped else "<b>✅ #BotUnblocked</b>",
+            "",
+            f'<b>👤 Name:</b> <a href="tg://user?id={uid}">{html.escape(name or "User")}</a>',
+            f"<b>🆔 ID:</b> <code>{uid}</code>",
+        ]
+        if uname:
+            lines.append(f"<b>🔗 Username:</b> @{html.escape(uname)}")
+        from plugins.commands import queue_report
+        queue_report(client, "\n".join(lines))
+    except Exception as e:
+        logging.getLogger(__name__).info(f"[BOT STOPPED] could not report: {type(e).__name__}: {e}")
 
 
 async def _user_label(bot, uid):
@@ -237,6 +281,12 @@ def _cancel_markup():
 async def broadcast_cmd(bot, message):
     admin_id = message.from_user.id
     _reset_waiting(admin_id)
+
+    reason = await _can_message(bot, target)
+    if reason:
+        return await message.reply_text(
+            f"<b>❌ Can't Send To</b> {await _user_label(bot, target)}<b>.\n{reason}</b>"
+        )
 
     replied = message.reply_to_message
     if replied:
