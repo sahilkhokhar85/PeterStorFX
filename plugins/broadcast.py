@@ -447,12 +447,6 @@ async def broadcast_cmd(bot, message):
     admin_id = message.from_user.id
     _reset_waiting(admin_id)
 
-    reason = await _can_message(bot, target)
-    if reason:
-        return await message.reply_text(
-            f"<b>❌ Can't Send To</b> {await _user_label(bot, target)}<b>.\n{reason}</b>"
-        )
-
     replied = message.reply_to_message
     if replied:
         msgs = [replied]
@@ -485,6 +479,12 @@ async def send_cmd(bot, message):
     if await db.is_user_banned(target):
         return await message.reply_text(
             "<b>🚫 This User Is Banned.\n/unban First To Message Them.</b>"
+        )
+
+    reason = await _can_message(bot, target)
+    if reason:
+        return await message.reply_text(
+            f"<b>❌ Can't Send To</b> {await _user_label(bot, target)}<b>.\n{reason}</b>"
         )
 
     replied = message.reply_to_message
