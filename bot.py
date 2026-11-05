@@ -68,6 +68,9 @@ async def start():
     # Heartbeat + this bot's part of "All Bots" broadcasts (plugins/broadcast.py)
     from plugins.broadcast import cross_bot_loop
     asyncio.create_task(cross_bot_loop(StreamBot))
+    # Premium payments: checks the FamApp emails for pending orders (plugins/premium.py)
+    from plugins.premium import start_poller
+    start_poller(StreamBot)
     # NOTE: plugins are already loaded by Pyrogram itself (plugins={"root": "plugins"}
     # in Peter/bot/__init__.py) when StreamBot.start() runs above. The old manual
     # importlib loop re-executed every plugin a second time (duplicate Mongo clients).
