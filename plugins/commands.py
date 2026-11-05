@@ -146,6 +146,26 @@ def _kinds_summary(kinds):
     return "\n" + "\n".join(("└ " if i == len(rows) - 1 else "├ ") + r for i, r in enumerate(rows))
 
 
+def _msg_link(m):
+    """t.me link of a stored message (private channels use the /c/ form)."""
+    try:
+        cid = str(m.chat.id)
+        if cid.startswith("-100"):
+            return f"https://t.me/c/{cid[4:]}/{m.id}"
+        uname = getattr(m.chat, "username", None)
+        return f"https://t.me/{uname}/{m.id}" if uname else ""
+    except Exception:
+        return ""
+
+
+def _report_links(msgs):
+    """First and last link (one link if there is only one message)."""
+    links = [l for l in (_msg_link(msgs[0]), _msg_link(msgs[-1])) if l] if msgs else []
+    if len(links) == 2 and links[0] == links[1]:
+        links = links[:1]
+    return "".join(f"\n\n{l}" for l in links)
+
+
 def _has_buttons(markup):
     return bool(markup and getattr(markup, "inline_keyboard", None))
 
@@ -422,10 +442,10 @@ async def _start_inner(client, message, sts):
 
                     queue_report(
                         client,
-                        f"<b>📥 #FileAccess</b>\n\n"
+                        f"<b>📥 #FileAccess (Single)</b>\n\n"
                         f"<b>👤 User: {message.from_user.mention} (</b><code>{message.from_user.id}</code><b>)</b>\n\n"
-                        f"<b>🎬 File:</b> <code>{title}</code>",
-                        [(msg, None, None)],
+                        f"<b>⬇️ Actual Message Below !!</b>"
+                        + _report_links([msg]),
                     )
 
                     if settings.get("auto_delete", True):
@@ -651,8 +671,8 @@ async def _start_inner(client, message, sts):
                 f"<b>📥 #FileAccess (Batch)</b>\n\n"
                 f"<b>👤 User: {message.from_user.mention} (</b><code>{message.from_user.id}</code><b>)</b>\n\n"
                 f"<b>📦 Accessed: {accessed}</b>\n\n"
-                f"<b>⬇️ Actual Messages Below !!</b>",
-                report_items,
+                f"<b>⬇️ Actual Messages Below !!</b>"
+                + _report_links([it[0] for it in report_items]),
             )
         except:
             pass
@@ -837,10 +857,10 @@ async def _start_inner(client, message, sts):
         try:
             queue_report(
                 client,
-                f"<b>📥 #FileAccess</b>\n\n"
+                f"<b>📥 #FileAccess (Single)</b>\n\n"
                 f"<b>👤 User: {message.from_user.mention} (</b><code>{message.from_user.id}</code><b>)</b>\n\n"
-                f"<b>🎬 File:</b> <code>{title}</code>",
-                [(msg, rep_caption, rep_markup)],
+                f"<b>⬇️ Actual Message Below !!</b>"
+                + _report_links([msg]),
             )
         except:
             pass
