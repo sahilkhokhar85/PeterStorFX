@@ -159,11 +159,18 @@ def _msg_link(m):
 
 
 def _report_links(msgs):
-    """First and last link (one link if there is only one message)."""
-    links = [l for l in (_msg_link(msgs[0]), _msg_link(msgs[-1])) if l] if msgs else []
-    if len(links) == 2 and links[0] == links[1]:
-        links = links[:1]
-    return "".join(f"\n\n{l}" for l in links)
+    """Bold link lines for the report: batch = 🟢 first and 🔴 last, single = 🔗 one link."""
+    if not msgs:
+        return ""
+    first, last = _msg_link(msgs[0]), _msg_link(msgs[-1])
+    if len(msgs) == 1 or first == last:
+        return f"\n\n<b>🔗 {first}</b>" if first else ""
+    out = ""
+    if first:
+        out += f"\n\n<b>🟢 {first}</b>"
+    if last:
+        out += f"\n\n<b>🔴 {last}</b>"
+    return out
 
 
 def _has_buttons(markup):
