@@ -971,7 +971,7 @@ async def copy_batch_to_log(bot, outlist, originals, status):
 @Client.on_callback_query(filters.regex(r"^bcb_cancel$") & filters.create(allowed))
 async def batch_cancel_button(bot, query):
     """Cancel button under the batch prompts (same as /cancel)."""
-    _MANUAL.pop(query.from_user.id, None)
+    await _unpin_panel(_MANUAL.pop(query.from_user.id, None))
     try:
         await bot.stop_listening(chat_id=query.message.chat.id)
     except Exception:
@@ -1056,18 +1056,44 @@ def _manual_text(count):
     )
 
 
+async def _pin_panel(panel):
+    """Keeps the counter message pinned at the top of the chat while files are being sent."""
+    try:
+        sent = await panel._client.pin_chat_message(
+            panel.chat.id, panel.id, disable_notification=True, both_sides=True)
+        try:
+            await sent.delete()      # the "pinned a message" notice
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+async def _unpin_panel(state):
+    if not state or not state.get("pinned"):
+        return
+    state["pinned"] = False
+    try:
+        panel = state["panel"]
+        await panel._client.unpin_chat_message(panel.chat.id, panel.id, both_sides=True)
+    except Exception:
+        pass
+
+
 async def start_manual(user, panel, finish, on_cancel=None, ask_type=False):
     """Open the one-by-one collector. `panel` is the bot message that shows the counter;
     `finish(bot, admin_id, state, outlist, failed)` is called after Done."""
     _MANUAL[user.id] = {
         "items": {}, "panel": panel, "t": time.time(), "busy": False, "user": user,
         "finish": finish, "on_cancel": on_cancel, "shown": 0, "task": None,
-        "ask_type": ask_type, "bot_only": False,
+        "ask_type": ask_type, "bot_only": False, "pinned": False,
     }
     try:
         await panel.edit_text(_manual_text(0), reply_markup=_manual_markup())
     except Exception:
         pass
+    _MANUAL[user.id]["pinned"] = await _pin_panel(panel)
 
 
 async def _refresh_panel(state):
@@ -1091,11 +1117,13 @@ async def manual_collect(bot, message):
         return
     if time.time() - state["t"] > MANUAL_IDLE and not state["busy"]:
         _MANUAL.pop(user.id, None)
+        await _unpin_panel(state)
         return
     text = (message.text or "").strip()
     if text.split(maxsplit=1)[:1] == ["/cancel"]:
         if not state["busy"]:
             _MANUAL.pop(user.id, None)
+            await _unpin_panel(state)
             if state["on_cancel"]:
                 state["on_cancel"]()
             await message.reply(bold("Cancelled."))
@@ -1117,6 +1145,7 @@ async def manual_cancel(bot, query):
     if state and state["busy"]:
         return await query.answer("Saving... Please Wait.", show_alert=True)
     _MANUAL.pop(query.from_user.id, None)
+    await _unpin_panel(state)
     if state and state["on_cancel"]:
         state["on_cancel"]()
     await query.answer("Cancelled.")
@@ -1138,6 +1167,7 @@ async def manual_done(bot, query):
         return await query.answer("Send At Least One Message First.", show_alert=True)
     state["busy"] = True
     await query.answer()
+    await _unpin_panel(state)
     panel = state["panel"]
     if state.get("ask_type"):
         choice, _shown = await ask_link_type(bot, query.message.chat.id, uid, panel=panel)
@@ -1229,7 +1259,7 @@ async def _finish_manual_batch(bot, admin_id, state, outlist, failed):
     filters.command(["batch"]) & filters.create(allowed)
 )
 async def gen_link_batch(bot, message):
-    _MANUAL.pop(message.from_user.id, None)
+    await _unpin_panel(_MANUAL.pop(message.from_user.id, None))
     await message.reply(
         bold("📦 Choose How To Make The Batch"),
         reply_markup=method_markup("bm_manual", "bm_range", "bcb_cancel"),
