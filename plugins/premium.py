@@ -312,10 +312,11 @@ async def _close(bot, order, status, text):
         {"_id": order["_id"], "status": "pending"}, {"$set": {"status": status}})
     if not res:
         return False
-    try:
-        await bot.edit_message_caption(order["chat"], order["msg"], text, reply_markup=None)
-    except Exception:
-        pass
+    if order.get("msg"):
+        try:
+            await bot.edit_message_caption(order["chat"], order["msg"], text, reply_markup=None)
+        except Exception:
+            pass
     return True
 
 
@@ -356,6 +357,75 @@ async def check_order(bot, query):
             pass
 
 
+# ---------------------------------------------------------------- Mini App helpers (Peter/server/miniapp.py)
+def _plain_qr_data_uri(uri):
+    import base64
+    import qrcode
+    qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=8, border=2)
+    qr.add_data(uri)
+    qr.make(fit=True)
+    bio = io.BytesIO()
+    qr.make_image(fill_color="black", back_color="white").save(bio, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(bio.getvalue()).decode()
+
+
+async def app_plans(uid):
+    plans = await get_plans()
+    if uid in ADMINS:
+        plans = plans + [TEST_PLAN]
+    return [{"id": p["_id"], "name": p["name"], "days": p["days"], "price": _rupees(p["price"])} for p in plans]
+
+
+async def app_create_order(bot, uid, plan_id):
+    """(order dict, None) or (None, error code: disabled / plan / busy / qr)."""
+    if not enabled():
+        return None, "disabled"
+    plan = TEST_PLAN if (plan_id == "test" and uid in ADMINS) else await _plans_col().find_one({"_id": plan_id})
+    if not plan:
+        return None, "plan"
+    now = _now()
+    busy = await _orders_col().find_one({
+        "status": "pending", "amount": str(plan["price"]), "expires": {"$gt": now}, "user": {"$ne": uid}})
+    if busy:
+        return None, "busy"
+    async for old in _orders_col().find({"status": "pending", "user": uid}):
+        await _close(bot, old, "cancelled", "<b>❌ Order Replaced.</b>")
+    oid = secrets.token_hex(4)
+    uri = _upi_uri(plan["price"], oid)
+    try:
+        qr = _plain_qr_data_uri(uri)
+    except Exception as e:
+        logger.warning(f"[PREMIUM] app QR failed: {type(e).__name__}: {e}")
+        return None, "qr"
+    await _orders_col().insert_one({
+        "_id": oid, "user": uid, "bot_id": BOT_ID, "chat": None, "msg": None, "via": "app",
+        "plan": plan["_id"], "plan_name": plan["name"], "days": plan["days"], "amount": str(plan["price"]),
+        "status": "pending", "created": now, "expires": now + datetime.timedelta(minutes=EXPIRY_MIN),
+    })
+    _ensure_poller(bot)
+    return {"order": oid, "plan": plan["name"], "amount": _rupees(plan["price"]),
+            "left": EXPIRY_MIN * 60, "upi": uri, "qr": qr}, None
+
+
+async def app_order_status(uid, oid):
+    o = await _orders_col().find_one({"_id": oid})
+    if not o or o["user"] != uid:
+        return None
+    out = {"status": o["status"], "left": max(0, int((o["expires"] - _now()).total_seconds()))}
+    if o["status"] == "paid":
+        until = await premium_until(uid)
+        if until:
+            out["until"] = (until + datetime.timedelta(hours=5, minutes=30)).strftime("%d %b %Y")
+    return out
+
+
+async def app_cancel_order(bot, uid, oid):
+    o = await _orders_col().find_one({"_id": oid})
+    if not o or o["user"] != uid:
+        return False
+    return await _close(bot, o, "cancelled", "<b>❌ Order Cancelled.</b>")
+
+
 # ---------------------------------------------------------------- verification
 async def _activate(bot, order, pay):
     now = _now()
@@ -367,13 +437,18 @@ async def _activate(bot, order, pay):
         {"$set": {"expires": until, "plan": order["plan_name"], "last_paid": now},
          "$setOnInsert": {"since": now}},
         upsert=True)
-    try:
-        await bot.edit_message_caption(
-            order["chat"], order["msg"],
-            f"<b>✅ Payment Received !!</b>\n\n<b>💎 Premium — {order['plan_name']}</b>\n"
-            f"<b>📅 Active Till: {_fmt_date(until)}</b>", reply_markup=None)
-    except Exception:
-        pass
+    done_text = (f"<b>✅ Payment Received !!</b>\n\n<b>💎 Premium — {order['plan_name']}</b>\n"
+                 f"<b>📅 Active Till: {_fmt_date(until)}</b>")
+    if order.get("msg"):
+        try:
+            await bot.edit_message_caption(order["chat"], order["msg"], done_text, reply_markup=None)
+        except Exception:
+            pass
+    elif order.get("via") == "app":
+        try:
+            await bot.send_message(order["user"], done_text)
+        except Exception:
+            pass
     who = f'<a href="tg://user?id={order["user"]}">{order["user"]}</a>'
     text = (
         "<b>💎 #PremiumPurchased</b>\n\n"
