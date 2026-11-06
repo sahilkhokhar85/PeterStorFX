@@ -4,10 +4,12 @@ The page at https://<domain>/app (Cloudflare Worker) posts Telegram's signed "in
 signature with this bot's token (so a user id can't be faked), look the user up in the premium list and answer
 with the link to open. Premium users get the bot link of the stored file; everybody else gets the shortener link.
 """
+import datetime
 import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -97,20 +99,35 @@ async def miniapp_open(request):
     if not rec or not rec.get("success"):
         return web.json_response({"ok": False}, status=404, headers=headers)
 
-    premium = False
+    until = None
     try:
-        from plugins.premium import is_premium
-        premium = await is_premium(uid)
+        from plugins.premium import premium_until
+        until = await premium_until(uid)
     except Exception as e:
         logger.warning(f"[MINIAPP] premium check failed: {type(e).__name__}: {e}")
 
-    if premium:
-        from Peter.bot import StreamBot
-        url = _bot_link(rec.get("destination"), getattr(StreamBot, "username", None))
+    from Peter.bot import StreamBot
+    username = getattr(StreamBot, "username", None)
+    extra = {"premium_url": f"https://t.me/{username}?start=premium" if username else None}
+    try:
+        from plugins.premium import get_plans
+        plans = await get_plans()
+        if plans:
+            first = min(plans, key=lambda x: x.get("price", 0))
+            extra["from_price"] = first.get("price")
+            extra["from_days"] = first.get("days")
+    except Exception:
+        pass
+
+    if until:
+        url = _bot_link(rec.get("destination"), username)
         if url:
-            return web.json_response({"ok": True, "premium": True, "url": url}, headers=headers)
+            ist = until + datetime.timedelta(hours=5, minutes=30)
+            left = max(1, math.ceil((until - datetime.datetime.utcnow()).total_seconds() / 86400))
+            return web.json_response({"ok": True, "premium": True, "url": url, "days": left,
+                                      "until": ist.strftime("%d %b %Y"), **extra}, headers=headers)
     # everybody else (and premium users when the bot link can't be built) goes through the shortener
     short = rec.get("shortUrl")
     if not short:
         return web.json_response({"ok": False}, status=404, headers=headers)
-    return web.json_response({"ok": True, "premium": False, "url": short}, headers=headers)
+    return web.json_response({"ok": True, "premium": False, "url": short, **extra}, headers=headers)
