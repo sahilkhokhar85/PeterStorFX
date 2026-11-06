@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 
 routes = web.RouteTableDef()
 
+# Mini app: premium users skip the shortener (Peter/server/miniapp.py)
+from Peter.server.miniapp import miniapp_open, miniapp_options  # noqa: E402
+routes.post("/miniapp/open")(miniapp_open)
+routes.options("/miniapp/open")(miniapp_options)
+
 
 def _readable_uptime(seconds: int) -> str:
     seconds = int(seconds)
