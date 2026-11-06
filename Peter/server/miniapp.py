@@ -131,3 +131,69 @@ async def miniapp_open(request):
     if not short:
         return web.json_response({"ok": False}, status=404, headers=headers)
     return web.json_response({"ok": True, "premium": False, "url": short, **extra}, headers=headers)
+
+
+# ------------------------------------------------------------------ premium plans / payment inside the Mini App
+async def _auth(request):
+    """(uid, body, None) for a genuine request, else (None, None, error response)."""
+    headers = _cors()
+    try:
+        body = await request.json()
+    except Exception:
+        return None, None, web.json_response({"ok": False}, status=400, headers=headers)
+    uid = check_init_data(str(body.get("initData") or ""))
+    if not uid:
+        return None, None, web.json_response({"ok": False}, status=403, headers=headers)
+    return uid, body, None
+
+
+async def miniapp_plans(request):
+    uid, body, err = await _auth(request)
+    if err:
+        return err
+    from plugins.premium import app_plans, enabled
+    if not enabled():
+        return web.json_response({"ok": False, "error": "disabled"}, headers=_cors())
+    return web.json_response({"ok": True, "plans": await app_plans(uid)}, headers=_cors())
+
+
+async def miniapp_order(request):
+    uid, body, err = await _auth(request)
+    if err:
+        return err
+    from Peter.bot import StreamBot
+    from plugins.premium import app_create_order
+    plan = str(body.get("plan") or "")
+    if not re.match(r"^[0-9A-Za-z_-]{1,20}$", plan):
+        return web.json_response({"ok": False, "error": "plan"}, status=400, headers=_cors())
+    order, code = await app_create_order(StreamBot, uid, plan)
+    if not order:
+        return web.json_response({"ok": False, "error": code}, headers=_cors())
+    return web.json_response({"ok": True, **order}, headers=_cors())
+
+
+async def miniapp_order_status(request):
+    uid, body, err = await _auth(request)
+    if err:
+        return err
+    from plugins.premium import app_order_status
+    oid = str(body.get("order") or "")
+    if not re.match(r"^[0-9a-f]{8}$", oid):
+        return web.json_response({"ok": False}, status=400, headers=_cors())
+    st = await app_order_status(uid, oid)
+    if not st:
+        return web.json_response({"ok": False}, status=404, headers=_cors())
+    return web.json_response({"ok": True, **st}, headers=_cors())
+
+
+async def miniapp_order_cancel(request):
+    uid, body, err = await _auth(request)
+    if err:
+        return err
+    from Peter.bot import StreamBot
+    from plugins.premium import app_cancel_order
+    oid = str(body.get("order") or "")
+    if not re.match(r"^[0-9a-f]{8}$", oid):
+        return web.json_response({"ok": False}, status=400, headers=_cors())
+    await app_cancel_order(StreamBot, uid, oid)
+    return web.json_response({"ok": True}, headers=_cors())
