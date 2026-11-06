@@ -261,6 +261,13 @@ async def premium_cmd(bot, message):
     await message.reply_text(await _home_text(message.from_user.id), reply_markup=await _plan_markup(message.from_user.id))
 
 
+@Client.on_message(filters.private & filters.regex(r"^/start premium$"), group=-1)
+async def start_premium(bot, message):
+    """t.me/<bot>?start=premium (the Mini App's Premium button) opens the plans screen."""
+    message.stop_propagation()
+    await premium_cmd(bot, message)
+
+
 @Client.on_callback_query(filters.regex(r"^prem_plan:[0-9A-Za-z_-]{1,20}$"))
 async def plan_chosen(bot, query):
     if not enabled():
