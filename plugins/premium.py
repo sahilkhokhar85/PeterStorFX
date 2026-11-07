@@ -9,7 +9,7 @@ Only ONE pending order per amount exists at a time (prices are whole rupees), so
 
 Environment (all bots share the same ones):
   FAM_UPI_ID, FAM_PAYEE_NAME (optional), IMAP_USERNAME, IMAP_APP_PASSWORD,
-  IMAP_HOST / IMAP_PORT / IMAP_SENDER_FILTER (optional), PAY_EXPIRY_MINUTES (optional, default 10)
+  IMAP_HOST / IMAP_PORT / IMAP_SENDER_FILTER (optional), PAY_EXPIRY_MINUTES (optional, default 15)
 """
 import asyncio
 import datetime
@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import secrets
+import time
 from decimal import Decimal, InvalidOperation
 from email import policy
 from email.utils import parsedate_to_datetime
@@ -42,9 +43,9 @@ IMAP_PASS = os.environ.get("IMAP_APP_PASSWORD", "").replace(" ", "").strip()
 IMAP_HOST = os.environ.get("IMAP_HOST", "imap.gmail.com").strip()
 IMAP_PORT = int(os.environ.get("IMAP_PORT", "993") or 993)
 SENDER = os.environ.get("IMAP_SENDER_FILTER", "no-reply@famapp.in").strip()
-EXPIRY_MIN = int(os.environ.get("PAY_EXPIRY_MINUTES", "10") or 10)
+EXPIRY_MIN = int(os.environ.get("PAY_EXPIRY_MINUTES", "15") or 15)
 POLL_SECONDS = 5
-LOOKBACK_HOURS = 6
+LOOKBACK_HOURS = 24
 IST = pytz.timezone("Asia/Kolkata")
 
 # Owner-only test plan (₹1, 1 day): shown only to the ADMINS, never to users
@@ -119,6 +120,7 @@ _IN_BODY = re.compile(r"you have successfully received", re.I)
 _OUT = re.compile(r"your payment of ₹.* is successful|you have successfully paid", re.I)
 _AMOUNT = re.compile(r"₹\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)")
 _UTR = re.compile(r"UTR\s*:?\s*([0-9]{9,})", re.I)
+_TOKEN = re.compile(r"[A-Za-z0-9]{8,40}")
 _FROM = re.compile(r"received\s*₹\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?\s*from\s+([^\r\n<]+)", re.I)
 
 
@@ -151,7 +153,7 @@ def _fetch_payments():
         cli.select("INBOX", readonly=True)
         status, data = cli.search(None, "FROM", SENDER, "SINCE", since)
         ids = data[0].split() if status == "OK" and data and data[0] else []
-        for num in ids[-40:]:
+        for num in ids[-80:]:
             if num in _SEEN:
                 if _SEEN[num]:
                     out.append(_SEEN[num])
@@ -182,8 +184,10 @@ def _fetch_payments():
             except (InvalidOperation, ValueError, TypeError):
                 continue
             who = _FROM.search(body)
+            toks = {t.upper() for t in _TOKEN.findall(body) if re.search(r"[0-9]", t)}
+            toks.add(u.group(1).upper())
             pay = {"utr": u.group(1), "amount": amount, "ts": ts,
-                   "name": (who.group(1).strip() if who else "")}
+                   "name": (who.group(1).strip() if who else ""), "tokens": toks}
             _SEEN[num] = pay
             out.append(pay)
     finally:
@@ -278,13 +282,7 @@ async def plan_chosen(bot, query):
     if not plan:
         return await query.answer("This Plan Is No Longer Available.", show_alert=True)
     now = _now()
-    # one pending order per amount: two payments of the same amount could not be told apart
-    busy = await _orders_col().find_one({
-        "status": "pending", "amount": str(plan["price"]), "expires": {"$gt": now}, "user": {"$ne": uid}})
-    if busy:
-        return await query.answer(
-            f"Another Payment Of ₹{_rupees(plan['price'])} Is In Progress. Try Again In A Few Minutes.",
-            show_alert=True)
+    # same-amount orders may run together: payments are told apart in _check_orders (or by UTR)
     # the user's own older pending order is replaced by this one
     async for old in _orders_col().find({"status": "pending", "user": uid}):
         await _close(bot, old, "cancelled", "<b>❌ Order Replaced.</b>")
@@ -384,10 +382,6 @@ async def app_create_order(bot, uid, plan_id):
     if not plan:
         return None, "plan"
     now = _now()
-    busy = await _orders_col().find_one({
-        "status": "pending", "amount": str(plan["price"]), "expires": {"$gt": now}, "user": {"$ne": uid}})
-    if busy:
-        return None, "busy"
     async for old in _orders_col().find({"status": "pending", "user": uid}):
         await _close(bot, old, "cancelled", "<b>❌ Order Replaced.</b>")
     oid = secrets.token_hex(4)
@@ -411,11 +405,44 @@ async def app_order_status(uid, oid):
     o = await _orders_col().find_one({"_id": oid})
     if not o or o["user"] != uid:
         return None
-    out = {"status": o["status"], "left": max(0, int((o["expires"] - _now()).total_seconds()))}
+    out = {"status": o["status"], "left": max(0, int((o["expires"] - _now()).total_seconds())),
+           "needs_utr": bool(o.get("held")) and o["status"] == "pending"}
     if o["status"] == "paid":
         until = await premium_until(uid)
         if until:
             out["until"] = (until + datetime.timedelta(hours=5, minutes=30)).strftime("%d %b %Y")
+    return out
+
+
+async def app_account(uid):
+    """Premium state + the last paid orders, for the Mini App home / My Plan screen."""
+    import math
+    until = await premium_until(uid)
+    out = {"premium": bool(until), "orders": []}
+    plans = await get_plans()
+    if plans:
+        first = min(plans, key=lambda x: x.get("price", 0))
+        out["from_price"] = _rupees(first.get("price"))
+        out["from_days"] = first.get("days")
+    if until:
+        doc = await _users_col().find_one({"_id": uid}) or {}
+        out["days"] = max(1, math.ceil((until - _now()).total_seconds() / 86400))
+        out["until"] = (until + datetime.timedelta(hours=5, minutes=30)).strftime("%d %b %Y")
+        out["plan"] = doc.get("plan") or "Premium"
+    async for o in _orders_col().find({"user": uid, "status": "paid"}).sort("paid", -1).limit(5):
+        when = (o.get("paid") or o["created"]) + datetime.timedelta(hours=5, minutes=30)
+        out["orders"].append({"plan": o["plan_name"], "amount": _rupees(o["amount"]),
+                              "date": when.strftime("%d %b %Y")})
+    return out
+
+
+async def app_claim(bot, uid, ident, order_id=None):
+    code, _ = await claim_payment(bot, uid, ident, order_id)
+    out = {"code": code}
+    if code == "ok":
+        st = await app_account(uid)
+        out["until"] = st.get("until")
+        out["plan"] = st.get("plan")
     return out
 
 
@@ -427,7 +454,7 @@ async def app_cancel_order(bot, uid, oid):
 
 
 # ---------------------------------------------------------------- verification
-async def _activate(bot, order, pay):
+async def _activate(bot, order, pay, tag="PremiumPurchased"):
     now = _now()
     doc = await _users_col().find_one({"_id": order["user"]})
     base = doc["expires"] if doc and doc.get("expires") and doc["expires"] > now else now
@@ -451,11 +478,12 @@ async def _activate(bot, order, pay):
             pass
     who = f'<a href="tg://user?id={order["user"]}">{order["user"]}</a>'
     text = (
-        "<b>💎 #PremiumPurchased</b>\n\n"
+        f"<b>💎 #{tag}</b>\n\n"
         f"<b>👤 User:</b> {who}\n"
         f"<b>📦 Plan: {order['plan_name']}</b>\n"
         f"<b>💰 Amount: ₹{_rupees(order['amount'])}</b>\n"
         f"<b>🧾 UTR:</b> <code>{pay['utr']}</code>\n"
+        f"<b>📧 Email Received: {_fmt_date(pay['ts'])}</b>\n"
         f"<b>🙍 Payer: {pay['name'] or '-'}</b>\n"
         f"<b>📅 Till: {_fmt_date(until)}</b>"
     )
@@ -488,25 +516,130 @@ async def _check_orders(bot):
         except Exception as e:
             logger.warning(f"[PREMIUM] Gmail check failed: {type(e).__name__}: {e}")
             return
+        def window(o):
+            return (o["created"] - datetime.timedelta(minutes=1), o["expires"] + datetime.timedelta(minutes=3))
+
+        async def settle(o, pay, tag="PremiumPurchased"):
+            try:
+                await _utr_col().insert_one({"_id": pay["utr"], "order": o["_id"], "t": _now()})
+            except DuplicateKeyError:
+                return False   # this payment already confirmed an order
+            done = await _orders_col().find_one_and_update(
+                {"_id": o["_id"], "status": "pending"},
+                {"$set": {"status": "paid", "utr": pay["utr"], "paid": _now()}})
+            if not done:
+                await _utr_col().delete_one({"_id": pay["utr"]})
+                return False
+            await _activate(bot, o, pay, tag)
+            return True
+
+        used = {d["_id"] async for d in _utr_col().find({"_id": {"$in": [p["utr"] for p in payments]}})}
+        groups = {}
         for o in live:
-            amount = Decimal(o["amount"])
-            lo = o["created"] - datetime.timedelta(minutes=2)
-            hi = o["expires"] + datetime.timedelta(minutes=3)
-            for pay in sorted(payments, key=lambda p: p["ts"]):
-                if pay["amount"] != amount or not (lo <= pay["ts"] <= hi):
-                    continue
-                try:
-                    await _utr_col().insert_one({"_id": pay["utr"], "order": o["_id"], "t": now})
-                except DuplicateKeyError:
-                    continue   # this payment already confirmed an order
-                done = await _orders_col().find_one_and_update(
-                    {"_id": o["_id"], "status": "pending"},
-                    {"$set": {"status": "paid", "utr": pay["utr"], "paid": now}})
-                if not done:
-                    await _utr_col().delete_one({"_id": pay["utr"]})
-                    break
-                await _activate(bot, o, pay)
+            groups.setdefault(o["amount"], []).append(o)
+        for amount_s, orders in groups.items():
+            amount = Decimal(amount_s)
+            orders.sort(key=lambda o: o["created"])
+            cands = [p for p in sorted(payments, key=lambda p: p["ts"])
+                     if p["amount"] == amount and p["utr"] not in used
+                     and any(window(o)[0] <= p["ts"] <= window(o)[1] for o in orders)]
+            if not cands:
+                continue
+            if len(orders) == 1 or len(cands) >= len(orders):
+                # every pending order of this amount is covered by a payment (or there is only one order):
+                # who gets which payment cannot matter, all of them end up with the same plan
+                left = list(orders)
+                for pay in cands:
+                    o = next((x for x in left if window(x)[0] <= pay["ts"] <= window(x)[1]), None)
+                    if o and await settle(o, pay):
+                        left.remove(o)
+                continue
+            # a payment came in but there are more orders than payments: it is not clear whose it is.
+            # Nobody gets it automatically; the payer confirms it with the UTR / Transaction ID.
+            fresh = [o for o in orders if not o.get("held")]
+            if fresh:
+                await _orders_col().update_many(
+                    {"_id": {"$in": [o["_id"] for o in fresh]}, "status": "pending"}, {"$set": {"held": True}})
+                uname = getattr(getattr(bot, "me", None), "username", None)
+                for o in fresh:
+                    if o.get("msg") and uname:
+                        try:
+                            await bot.edit_message_caption(
+                                o["chat"], o["msg"],
+                                f"<b>✅ Payment Detected</b>\n\n<b>💰 Amount: ₹{_rupees(o['amount'])}</b>\n\n"
+                                "<b>Several People Are Paying The Same Amount. Open The Mini App And Enter Your "
+                                "UTR / Transaction ID To Confirm Yours.</b>",
+                                reply_markup=InlineKeyboardMarkup([
+                                    [InlineKeyboardButton("📲 Confirm In Mini App", url=f"https://t.me/{uname}/open")],
+                                    [InlineKeyboardButton("❌ Cancel Order", callback_data=f"prem_cancel:{o['_id']}")]]))
+                        except Exception:
+                            pass
+
+
+# ---------------------------------------------------------------- UTR / Transaction ID claim
+_CLAIM_TRIES = {}
+
+
+async def claim_payment(bot, uid, ident, order_id=None):
+    """The user types the UTR (bank apps) or the Transaction ID (FamApp) of a payment.
+    Returns (code, info): ok / format / throttle / disabled / error / notfound / used / amount."""
+    if not enabled():
+        return "disabled", None
+    ident = re.sub(r"[^A-Za-z0-9]", "", str(ident or "")).upper()
+    if len(ident) < 8 or len(ident) > 40 or not re.search(r"[0-9]", ident):
+        return "format", None
+    now_t = time.time()
+    tries = [t for t in _CLAIM_TRIES.get(uid, []) if now_t - t < 600]
+    if len(tries) >= 6:
+        return "throttle", None
+    tries.append(now_t)
+    _CLAIM_TRIES[uid] = tries
+    async with _CHECK_LOCK:
+        try:
+            payments = await asyncio.to_thread(_fetch_payments)
+        except Exception as e:
+            logger.warning(f"[PREMIUM] claim: Gmail check failed: {type(e).__name__}: {e}")
+            return "error", None
+        pay = next((p for p in payments if ident in p.get("tokens", ())), None)
+        if not pay:
+            return "notfound", None
+        if await _utr_col().find_one({"_id": pay["utr"]}):
+            return "used", None
+        q = {"user": uid, "status": "pending"}
+        if order_id:
+            q["_id"] = order_id
+        order = None
+        async for o in _orders_col().find(q).sort("created", -1):
+            if Decimal(o["amount"]) == pay["amount"]:
+                order = o
                 break
+        tag = "PremiumPurchased"
+        if not order:
+            # late claim: the order is gone (expired / cancelled), the plan is found from the amount
+            plans = await get_plans()
+            if uid in ADMINS:
+                plans = plans + [TEST_PLAN]
+            plan = next((p for p in plans if Decimal(str(p["price"])) == pay["amount"]), None)
+            if not plan:
+                return "amount", None
+            now = _now()
+            order = {"_id": secrets.token_hex(4), "user": uid, "bot_id": BOT_ID, "chat": None, "msg": None,
+                     "via": "app", "plan": plan["_id"], "plan_name": plan["name"], "days": plan["days"],
+                     "amount": str(plan["price"]), "status": "pending", "created": now, "expires": now}
+            await _orders_col().insert_one(order)
+            tag = "PremiumClaimed"
+        try:
+            await _utr_col().insert_one({"_id": pay["utr"], "order": order["_id"], "t": _now()})
+        except DuplicateKeyError:
+            return "used", None
+        done = await _orders_col().find_one_and_update(
+            {"_id": order["_id"], "status": "pending"},
+            {"$set": {"status": "paid", "utr": pay["utr"], "paid": _now()}})
+        if not done:
+            await _utr_col().delete_one({"_id": pay["utr"]})
+            return "error", None
+    await _activate(bot, order, pay, tag)
+    return "ok", None
 
 
 _POLLER = None
