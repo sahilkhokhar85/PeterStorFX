@@ -197,3 +197,27 @@ async def miniapp_order_cancel(request):
         return web.json_response({"ok": False}, status=400, headers=_cors())
     await app_cancel_order(StreamBot, uid, oid)
     return web.json_response({"ok": True}, headers=_cors())
+
+
+async def miniapp_status(request):
+    """Account state for the Mini App when it is opened without a link (bot's Premium button)."""
+    uid, body, err = await _auth(request)
+    if err:
+        return err
+    from plugins.premium import app_account, enabled
+    st = await app_account(uid)
+    st["enabled"] = bool(enabled())
+    return web.json_response({"ok": True, **st}, headers=_cors())
+
+
+async def miniapp_claim(request):
+    uid, body, err = await _auth(request)
+    if err:
+        return err
+    from Peter.bot import StreamBot
+    from plugins.premium import app_claim
+    oid = str(body.get("order") or "")
+    if oid and not re.match(r"^[0-9a-f]{8}$", oid):
+        return web.json_response({"ok": False}, status=400, headers=_cors())
+    res = await app_claim(StreamBot, uid, str(body.get("ident") or ""), oid or None)
+    return web.json_response({"ok": True, **res}, headers=_cors())
