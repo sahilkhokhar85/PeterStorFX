@@ -342,6 +342,15 @@ class _Status:
                 pass
 
 
+def _start_buttons(username):
+    """Start screen: the Premium Mini App on top, then Maintainer and Update Channel."""
+    return [
+        [InlineKeyboardButton('💎 Premium Plans', url=f'https://t.me/{username}/open')],
+        [InlineKeyboardButton('👨‍💻 Maintainer', url='https://t.me/RudraBlaze'),
+         InlineKeyboardButton('📢 Update Channel', url='https://t.me/ChillFlizX')],
+    ]
+
+
 @Client.on_message(filters.command("start") & filters.incoming)
 async def start(client, message):
     """The "Fetching" message goes out first, before any database or channel check, so a
@@ -391,14 +400,7 @@ async def _start_inner(client, message, sts):
         )
 
     if len(message.command) != 2:
-        buttons = [[
-            InlineKeyboardButton('👨‍💻 Maintainer', url='https://t.me/RudraBlaze'),
-            InlineKeyboardButton('📢 Update Channel', url='https://t.me/ChillFlizX')
-            ],[
-            InlineKeyboardButton('💁‍♂️ Help', callback_data='help'),
-            InlineKeyboardButton('💎 About', callback_data='about')
-        ]]
-        reply_markup = InlineKeyboardMarkup(buttons)
+        reply_markup = InlineKeyboardMarkup(_start_buttons(client.me.username))
         me = client.me
         start_caption = settings.get("start_message") or script.START_TXT
         try:
@@ -929,14 +931,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
 
     
     elif query.data == "start":
-        buttons = [[
-            InlineKeyboardButton('👨‍💻 Maintainer', url='https://t.me/RudraBlaze'),
-            InlineKeyboardButton('📢 Update Channel', url='https://t.me/ChillFlizX')
-            ],[
-            InlineKeyboardButton('💁‍♂️ Help', callback_data='help'),
-            InlineKeyboardButton('💎 About', callback_data='about')
-        ]]
-        reply_markup = InlineKeyboardMarkup(buttons)
+        reply_markup = InlineKeyboardMarkup(_start_buttons(client.me.username))
         await client.edit_message_media(
             query.message.chat.id, 
             query.message.id, 
