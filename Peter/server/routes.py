@@ -21,10 +21,12 @@ routes = web.RouteTableDef()
 
 # Mini app: premium users skip the shortener (Peter/server/miniapp.py)
 from Peter.server.miniapp import (  # noqa: E402
-    miniapp_open, miniapp_options, miniapp_plans, miniapp_order, miniapp_order_status, miniapp_order_cancel)
+    miniapp_open, miniapp_options, miniapp_plans, miniapp_order, miniapp_order_status, miniapp_order_cancel,
+    miniapp_status, miniapp_claim)
 for _path, _handler in (("/miniapp/open", miniapp_open), ("/miniapp/plans", miniapp_plans),
                         ("/miniapp/order", miniapp_order), ("/miniapp/order_status", miniapp_order_status),
-                        ("/miniapp/order_cancel", miniapp_order_cancel)):
+                        ("/miniapp/order_cancel", miniapp_order_cancel), ("/miniapp/status", miniapp_status),
+                        ("/miniapp/claim", miniapp_claim)):
     routes.post(_path)(_handler)
     routes.options(_path)(miniapp_options)
 
