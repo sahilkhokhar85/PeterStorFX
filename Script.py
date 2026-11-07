@@ -11,7 +11,7 @@ Welcome To ChillFliz File Store Bot! ✨❤️
 
 💬 Need Help, Have A Request, Query, Or Feedback? We're Here To Help.
 
-🧑‍🔧 Contact >>> @ChillFlizOwnerBot</b>"""
+🧑‍🔧 Support >>> @ChillFlizOwnerBot</b>"""
 
     
     CAPTION = """<b>{file_caption}</b>
@@ -30,7 +30,7 @@ Welcome To ChillFliz File Store Bot! ✨❤️
 
 👨‍💻 Developer: <a href=https://t.me/RudraBlaze>DEVIL</a>
 
-👥 Support: <a href=https://t.me/ChillFlizOwnerBot>Contact Bot</a>
+👥 Support: <a href=https://t.me/ChillFlizOwnerBot>Support Bot</a>
 
 📢 Update Channel: <a href=https://t.me/ChillFlizX>ChillFliz</a></b>
 """
