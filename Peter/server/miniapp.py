@@ -166,7 +166,8 @@ async def miniapp_order(request):
     plan = str(body.get("plan") or "")
     if not re.match(r"^[0-9A-Za-z_-]{1,20}$", plan):
         return web.json_response({"ok": False, "error": "plan"}, status=400, headers=_cors())
-    order, code = await app_create_order(StreamBot, uid, plan)
+    promo = str(body.get("promo") or "")[:30] or None
+    order, code = await app_create_order(StreamBot, uid, plan, promo, bool(body.get("use_points")))
     if not order:
         return web.json_response({"ok": False, "error": code}, headers=_cors())
     return web.json_response({"ok": True, **order}, headers=_cors())
@@ -221,3 +222,53 @@ async def miniapp_claim(request):
         return web.json_response({"ok": False}, status=400, headers=_cors())
     res = await app_claim(StreamBot, uid, str(body.get("ident") or ""), oid or None)
     return web.json_response({"ok": True, **res}, headers=_cors())
+
+
+async def miniapp_rewards(request):
+    uid, body, err = await _auth(request)
+    if err:
+        return err
+    from Peter.bot import StreamBot
+    from plugins import rewards
+    return web.json_response({"ok": True, **await rewards.summary(uid, getattr(StreamBot, "username", None))},
+                             headers=_cors())
+
+
+async def miniapp_quote(request):
+    """Price preview for the Confirm Order screen: promo code and points."""
+    uid, body, err = await _auth(request)
+    if err:
+        return err
+    from plugins import rewards
+    from plugins.premium import _plans_col
+    plan_id = str(body.get("plan") or "")
+    if not re.match(r"^[0-9A-Za-z_-]{1,20}$", plan_id):
+        return web.json_response({"ok": False}, status=400, headers=_cors())
+    plan = await _plans_col().find_one({"_id": plan_id})
+    if not plan:
+        return web.json_response({"ok": False, "error": "plan"}, headers=_cors())
+    promo = str(body.get("promo") or "")[:30] or None
+    q, code = await rewards.quote(uid, plan["price"], promo, bool(body.get("use_points")))
+    if not q:
+        return web.json_response({"ok": False, "error": code}, headers=_cors())
+    q["balance"] = int((await rewards.get(uid)).get("points", 0))
+    return web.json_response({"ok": True, **q}, headers=_cors())
+
+
+async def miniapp_upload(request):
+    """Screenshot of a manual payment (JPEG, base64) -> the admins approve / reject it in the bot."""
+    uid, body, err = await _auth(request)
+    if err:
+        return err
+    import base64
+    from Peter.bot import StreamBot
+    from plugins import rewards
+    oid = str(body.get("order") or "")
+    if not re.match(r"^[0-9a-f]{8}$", oid):
+        return web.json_response({"ok": False}, status=400, headers=_cors())
+    try:
+        data = base64.b64decode(str(body.get("image") or "").split(",")[-1], validate=False)
+    except Exception:
+        return web.json_response({"ok": False, "code": "format"}, headers=_cors())
+    code = await rewards.manual_submit(StreamBot, uid, oid, data)
+    return web.json_response({"ok": code == "ok", "code": code}, headers=_cors())
