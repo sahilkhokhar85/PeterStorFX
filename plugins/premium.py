@@ -310,6 +310,11 @@ async def _close(bot, order, status, text):
         {"_id": order["_id"], "status": "pending"}, {"$set": {"status": status}})
     if not res:
         return False
+    try:
+        from plugins import rewards
+        await rewards.release(order)
+    except Exception as e:
+        logger.warning(f"[PREMIUM] points release failed: {type(e).__name__}: {e}")
     if order.get("msg"):
         try:
             await bot.edit_message_caption(order["chat"], order["msg"], text, reply_markup=None)
@@ -374,30 +379,40 @@ async def app_plans(uid):
     return [{"id": p["_id"], "name": p["name"], "days": p["days"], "price": _rupees(p["price"])} for p in plans]
 
 
-async def app_create_order(bot, uid, plan_id):
-    """(order dict, None) or (None, error code: disabled / plan / busy / qr)."""
+async def app_create_order(bot, uid, plan_id, promo=None, use_points=False):
+    """(order dict, None) or (None, error code: disabled / plan / promo codes / qr / points)."""
     if not enabled():
         return None, "disabled"
     plan = TEST_PLAN if (plan_id == "test" and uid in ADMINS) else await _plans_col().find_one({"_id": plan_id})
     if not plan:
         return None, "plan"
     now = _now()
+    from plugins import rewards
+    q = {"base": int(plan["price"]), "promo": None, "promo_off": 0, "points": 0, "points_off": 0, "final": int(plan["price"])}
+    if plan["_id"] != "test":
+        q, err = await rewards.quote(uid, plan["price"], promo, use_points)
+        if err:
+            return None, err
     async for old in _orders_col().find({"status": "pending", "user": uid}):
         await _close(bot, old, "cancelled", "<b>❌ Order Replaced.</b>")
     oid = secrets.token_hex(4)
-    uri = _upi_uri(plan["price"], oid)
+    uri = _upi_uri(q["final"], oid)
     try:
         qr = _plain_qr_data_uri(uri)
     except Exception as e:
         logger.warning(f"[PREMIUM] app QR failed: {type(e).__name__}: {e}")
         return None, "qr"
+    if q["points"] and not await rewards.reserve(uid, q["points"]):
+        return None, "points"
     await _orders_col().insert_one({
         "_id": oid, "user": uid, "bot_id": BOT_ID, "chat": None, "msg": None, "via": "app",
-        "plan": plan["_id"], "plan_name": plan["name"], "days": plan["days"], "amount": str(plan["price"]),
+        "plan": plan["_id"], "plan_name": plan["name"], "days": plan["days"], "amount": str(q["final"]),
+        "base_price": q["base"], "promo": q["promo"], "promo_off": q["promo_off"], "points_used": q["points"],
         "status": "pending", "created": now, "expires": now + datetime.timedelta(minutes=EXPIRY_MIN),
     })
     _ensure_poller(bot)
-    return {"order": oid, "plan": plan["name"], "amount": _rupees(plan["price"]),
+    return {"order": oid, "plan": plan["name"], "amount": _rupees(q["final"]), "base": q["base"],
+            "promo": q["promo"], "promo_off": q["promo_off"], "points": q["points"], "points_off": q["points_off"],
             "left": EXPIRY_MIN * 60, "upi": uri, "qr": qr}, None
 
 
@@ -406,7 +421,8 @@ async def app_order_status(uid, oid):
     if not o or o["user"] != uid:
         return None
     out = {"status": o["status"], "left": max(0, int((o["expires"] - _now()).total_seconds())),
-           "needs_utr": bool(o.get("held")) and o["status"] == "pending"}
+           "needs_utr": bool(o.get("held")) and o["status"] == "pending",
+           "manual": bool(o.get("manual")) and o["status"] == "pending"}
     if o["status"] == "paid":
         until = await premium_until(uid)
         if until:
@@ -458,14 +474,33 @@ async def _activate(bot, order, pay, tag="PremiumPurchased"):
     now = _now()
     doc = await _users_col().find_one({"_id": order["user"]})
     base = doc["expires"] if doc and doc.get("expires") and doc["expires"] > now else now
-    until = base + datetime.timedelta(days=int(order["days"]))
+    bonus = 0
+    if str(order.get("plan")) != "test":
+        try:
+            from plugins import rewards
+            bonus = int((await rewards.perks(order["user"]))["bonus"])
+        except Exception:
+            bonus = 0
+    until = base + datetime.timedelta(days=int(order["days"]) + bonus)
     await _users_col().update_one(
         {"_id": order["user"]},
         {"$set": {"expires": until, "plan": order["plan_name"], "last_paid": now},
          "$setOnInsert": {"since": now}},
         upsert=True)
+    earned = {"points": 0, "tier_up": None}
+    try:
+        from plugins import rewards
+        earned = await rewards.after_paid(bot, order)
+    except Exception as e:
+        logger.warning(f"[PREMIUM] rewards failed: {type(e).__name__}: {e}")
     done_text = (f"<b>✅ Payment Received !!</b>\n\n<b>💎 Premium — {order['plan_name']}</b>\n"
                  f"<b>📅 Active Till: {_fmt_date(until)}</b>")
+    if bonus:
+        done_text += f"\n<b>🎁 Bonus: +{bonus} Day{'s' if bonus > 1 else ''}</b>"
+    if earned.get("points"):
+        done_text += f"\n<b>⭐ Points Earned: +{earned['points']}</b>"
+    if earned.get("tier_up"):
+        done_text += f"\n<b>🏆 You Are Now {earned['tier_up']} !!</b>"
     if order.get("msg"):
         try:
             await bot.edit_message_caption(order["chat"], order["msg"], done_text, reply_markup=None)
