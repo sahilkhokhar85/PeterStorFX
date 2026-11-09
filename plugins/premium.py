@@ -284,6 +284,23 @@ async def plan_chosen(bot, query):
     now = _now()
     # same-amount orders may run together: payments are told apart in _check_orders (or by UTR)
     # the user's own older pending order is replaced by this one
+    # Same plan, promo and points as a still-open app order: hand back that order (same QR and timer).
+    async for old in _orders_col().find({"status": "pending", "user": uid, "via": "app"}):
+        if (old.get("plan") == plan["_id"] and (old.get("promo") or None) == (q["promo"] or None)
+                and bool(old.get("points_used")) == bool(q["points"]) and old["expires"] > now
+                and not old.get("held") and not old.get("manual")):
+            try:
+                ruri = _upi_uri(int(old["amount"]), old["_id"])
+                rqr = _plain_qr_data_uri(ruri)
+            except Exception as e:
+                logger.warning(f"[PREMIUM] app QR reuse failed: {type(e).__name__}: {e}")
+                break
+            _ensure_poller(bot)
+            return {"order": old["_id"], "plan": old["plan_name"], "amount": _rupees(old["amount"]),
+                    "base": old.get("base_price", int(old["amount"])), "promo": old.get("promo"),
+                    "promo_off": old.get("promo_off", 0), "points": old.get("points_used", 0),
+                    "points_off": old.get("points_off", 0),
+                    "left": max(1, int((old["expires"] - now).total_seconds())), "upi": ruri, "qr": rqr}, None
     async for old in _orders_col().find({"status": "pending", "user": uid}):
         await _close(bot, old, "cancelled", "<b>❌ Order Replaced.</b>")
     oid = secrets.token_hex(4)
@@ -393,6 +410,23 @@ async def app_create_order(bot, uid, plan_id, promo=None, use_points=False):
         q, err = await rewards.quote(uid, plan["price"], promo, use_points)
         if err:
             return None, err
+    # Same plan, promo and points as a still-open app order: hand back that order (same QR and timer).
+    async for old in _orders_col().find({"status": "pending", "user": uid, "via": "app"}):
+        if (old.get("plan") == plan["_id"] and (old.get("promo") or None) == (q["promo"] or None)
+                and bool(old.get("points_used")) == bool(q["points"]) and old["expires"] > now
+                and not old.get("held") and not old.get("manual")):
+            try:
+                ruri = _upi_uri(int(old["amount"]), old["_id"])
+                rqr = _plain_qr_data_uri(ruri)
+            except Exception as e:
+                logger.warning(f"[PREMIUM] app QR reuse failed: {type(e).__name__}: {e}")
+                break
+            _ensure_poller(bot)
+            return {"order": old["_id"], "plan": old["plan_name"], "amount": _rupees(old["amount"]),
+                    "base": old.get("base_price", int(old["amount"])), "promo": old.get("promo"),
+                    "promo_off": old.get("promo_off", 0), "points": old.get("points_used", 0),
+                    "points_off": old.get("points_off", 0),
+                    "left": max(1, int((old["expires"] - now).total_seconds())), "upi": ruri, "qr": rqr}, None
     async for old in _orders_col().find({"status": "pending", "user": uid}):
         await _close(bot, old, "cancelled", "<b>❌ Order Replaced.</b>")
     oid = secrets.token_hex(4)
@@ -407,7 +441,7 @@ async def app_create_order(bot, uid, plan_id, promo=None, use_points=False):
     await _orders_col().insert_one({
         "_id": oid, "user": uid, "bot_id": BOT_ID, "chat": None, "msg": None, "via": "app",
         "plan": plan["_id"], "plan_name": plan["name"], "days": plan["days"], "amount": str(q["final"]),
-        "base_price": q["base"], "promo": q["promo"], "promo_off": q["promo_off"], "points_used": q["points"],
+        "base_price": q["base"], "promo": q["promo"], "promo_off": q["promo_off"], "points_used": q["points"], "points_off": q["points_off"],
         "status": "pending", "created": now, "expires": now + datetime.timedelta(minutes=EXPIRY_MIN),
     })
     _ensure_poller(bot)
@@ -445,9 +479,9 @@ async def app_account(uid):
         out["days"] = max(1, math.ceil((until - _now()).total_seconds() / 86400))
         out["until"] = (until + datetime.timedelta(hours=5, minutes=30)).strftime("%d %b %Y")
         out["plan"] = doc.get("plan") or "Premium"
-    async for o in _orders_col().find({"user": uid, "status": "paid"}).sort("paid", -1).limit(5):
+    async for o in _orders_col().find({"user": uid, "status": "paid"}).sort("paid", -1).limit(20):
         when = (o.get("paid") or o["created"]) + datetime.timedelta(hours=5, minutes=30)
-        out["orders"].append({"plan": o["plan_name"], "amount": _rupees(o["amount"]),
+        out["orders"].append({"plan": o["plan_name"], "amount": _rupees(o["amount"]), "days": o.get("days"),
                               "date": when.strftime("%d %b %Y")})
     return out
 
