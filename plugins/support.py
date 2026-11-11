@@ -9,8 +9,8 @@ OWNER = "RudraBlaze"
 async def support_cmd(bot, message):
     await message.reply_text(
         "<b>💬 Contact Support !!\n\n"
-        "Need Help, Have A Request, Query Or Feedback?\n"
-        "Payment Or Premium Issue? We're Here To Help."
+        "Need Help, Have A Request, Query Or Feedback?"
+        "Payment Or Premium Issue? We're Here To Help.\n\n"
         "👇 Let's Talk, Message Me Below.</b>",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("🤖 Support Bot", url=f"https://t.me/{SUPPORT_BOT}"),
