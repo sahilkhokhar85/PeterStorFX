@@ -47,23 +47,27 @@ async def start_bot_with_flood_wait():
 
 
 USER_COMMANDS = [
-    BotCommand("start", "Start The Bot"),
-    BotCommand("premium", "Premium Plans"),
+    BotCommand("start", "🚀 Start The Bot"),
+    BotCommand("premium", "💎 Premium Plans"),
+    BotCommand("support", "💬 Contact Support"),
 ]
-ADMIN_COMMANDS = USER_COMMANDS + [
-    BotCommand("padmin", "Premium Admin"),
-    BotCommand("settings", "Bot Settings"),
-    BotCommand("broadcast", "Broadcast A Message"),
-    BotCommand("send", "Send A Message To A User"),
-    BotCommand("status", "Bot Status"),
-    BotCommand("ban", "Ban A User"),
-    BotCommand("unban", "Unban A User"),
-    BotCommand("banlist", "Banned Users List"),
-    BotCommand("promo", "Promo Codes"),
-    BotCommand("link", "Generate A Link"),
-    BotCommand("batch", "Generate A Batch Link"),
-    BotCommand("unpin", "Unpin Messages"),
-    BotCommand("restart", "Restart The Bot"),
+ADMIN_COMMANDS = [
+    BotCommand("start", "🚀 Start The Bot"),
+    BotCommand("link", "🔗 Create A File Link"),
+    BotCommand("batch", "📦 Create A Batch Link"),
+    BotCommand("premium", "💎 Premium Plans"),
+    BotCommand("support", "💬 Contact Support"),
+    BotCommand("broadcast", "📢 Send To All Users"),
+    BotCommand("send", "✉️ Send To One User"),
+    BotCommand("unpin", "📌 Remove Pinned Messages"),
+    BotCommand("ban", "🚫 Ban A User"),
+    BotCommand("unban", "✅ Unban A User"),
+    BotCommand("banlist", "📋 Get The Ban List"),
+    BotCommand("status", "📊 Bot Status"),
+    BotCommand("settings", "⚙️ Open Settings"),
+    BotCommand("padmin", "🛠 Premium Admin"),
+    BotCommand("promo", "🎟 Promo Codes"),
+    BotCommand("restart", "🔄 Restart The Bot"),
 ]
 
 
