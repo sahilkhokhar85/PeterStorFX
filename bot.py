@@ -8,13 +8,14 @@ import pytz
 from aiohttp import web
 from pyrogram import idle
 from pyrogram.errors import FloodWait
+from pyrogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 
 # Get logging configurations
 logging.config.fileConfig('logging.conf')
 logging.getLogger().setLevel(logging.INFO)
 logging.getLogger("pyrogram").setLevel(logging.ERROR)
 
-from config import REPORT_CHANNEL, ON_HEROKU, PORT
+from config import REPORT_CHANNEL, ON_HEROKU, PORT, ADMINS
 from Script import script
 from Peter.bot import StreamBot
 from Peter.server import web_server
@@ -45,6 +46,47 @@ async def start_bot_with_flood_wait():
                 mark_ok()  # we are alive, just waiting - don't let the health check call us stuck
 
 
+USER_COMMANDS = [
+    BotCommand("start", "Start The Bot"),
+    BotCommand("premium", "Premium Plans"),
+]
+ADMIN_COMMANDS = USER_COMMANDS + [
+    BotCommand("padmin", "Premium Admin"),
+    BotCommand("settings", "Bot Settings"),
+    BotCommand("broadcast", "Broadcast A Message"),
+    BotCommand("send", "Send A Message To A User"),
+    BotCommand("status", "Bot Status"),
+    BotCommand("ban", "Ban A User"),
+    BotCommand("unban", "Unban A User"),
+    BotCommand("banlist", "Banned Users List"),
+    BotCommand("promo", "Promo Codes"),
+    BotCommand("link", "Generate A Link"),
+    BotCommand("batch", "Generate A Batch Link"),
+    BotCommand("unpin", "Unpin Messages"),
+    BotCommand("restart", "Restart The Bot"),
+]
+
+
+async def set_command_menus(bot):
+    """Everyone sees only /start and /premium in the command menu; the owners and the admins added
+    from /settings see the full list. Commands still work when typed, this only changes the menu."""
+    try:
+        await bot.set_bot_commands(USER_COMMANDS, scope=BotCommandScopeDefault())
+    except Exception as e:
+        logging.warning(f"Couldn't set the default command menu: {type(e).__name__}: {e}")
+    ids = {a for a in ADMINS if isinstance(a, int)}
+    try:
+        from plugins.admins_db import get_all_admins
+        ids |= {int(a["_id"]) for a in await get_all_admins()}
+    except Exception:
+        pass
+    for uid in ids:
+        try:
+            await bot.set_bot_commands(ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=uid))
+        except Exception as e:
+            logging.info(f"Admin command menu skipped for {uid}: {type(e).__name__}")
+
+
 async def start():
     print('\n')
     print('Initializing Peter Bot')
@@ -62,6 +104,7 @@ async def start():
     me = await StreamBot.get_me()
     StreamBot.username = me.username
     mark_ok()
+    asyncio.create_task(set_command_menus(StreamBot))
     asyncio.create_task(run_watchdog(StreamBot))
     # Files that were due for auto-delete while the bot was down / restarting
     asyncio.create_task(restore_pending_deletes(StreamBot))
