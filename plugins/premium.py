@@ -241,7 +241,6 @@ def _order_caption(plan_name, amount):
 def _order_markup(oid):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Check Payment", callback_data=f"prem_check:{oid}")],
-        [InlineKeyboardButton("⭐ Pay With Stars (Outside India)", callback_data=f"prem_stars:{oid}")],
         [InlineKeyboardButton("❌ Cancel Order", callback_data=f"prem_cancel:{oid}")],
     ])
 
@@ -451,27 +450,6 @@ def _stars_media(plan, uid):
     return media, n
 
 
-@Client.on_callback_query(filters.regex(r"^prem_stars:[0-9a-f]{8}$"))
-async def stars_button(bot, query):
-    uid = query.from_user.id
-    order = await _orders_col().find_one({"_id": query.data.split(":", 1)[1]})
-    if not order or order["user"] != uid or order["status"] != "pending":
-        return await query.answer("This Order Is No Longer Active.", show_alert=True)
-    plan = await _plan_by_id(str(order["plan"]), uid)
-    if not plan:
-        return await query.answer("This Plan Is No Longer Available.", show_alert=True)
-    media, n = _stars_media(plan, uid)
-    try:
-        await bot.invoke(functions.messages.SendMedia(
-            peer=await bot.resolve_peer(query.message.chat.id), media=media, message="", random_id=bot.rnd_id(),
-            reply_markup=rtypes.ReplyInlineMarkup(rows=[rtypes.KeyboardButtonRow(
-                buttons=[rtypes.KeyboardButtonBuy(text=f"Pay ⭐{n}")])])))
-    except Exception as e:
-        logger.warning(f"[PREMIUM] stars invoice failed: {type(e).__name__}: {e}")
-        return await query.answer("Could Not Open Stars Payment. Try Again.", show_alert=True)
-    await query.answer("Stars Invoice Sent ⭐")
-
-
 async def app_stars_link(bot, uid, plan_id):
     """({"link", "stars"}, None) or (None, error code) - the invoice the Mini App opens with openInvoice."""
     if not enabled():
@@ -562,67 +540,35 @@ async def stars_raw(bot, update, users, chats):
 
 
 # ---------------------------------------------------------------- user flow
-@Client.on_message(filters.command("premium") & filters.private)
-async def premium_cmd(bot, message):
-    if not enabled():
-        return await message.reply_text("<b>Premium Is Not Available Right Now.</b>")
-    await message.reply_text(await _home_text(message.from_user.id), reply_markup=await _plan_markup(message.from_user.id))
+@Client.on_message(filters.command("myplan") & filters.private)
+async def myplan_cmd(bot, message):
+    uid = message.from_user.id
+    until = await premium_until(uid)
+    username = (await bot.get_me()).username
+    if until:
+        import math
+        doc = await _users_col().find_one({"_id": uid}) or {}
+        left = max(1, math.ceil((until - _now()).total_seconds() / 86400))
+        text = (f"<b>💎 My Plan !!\n\n"
+                f"✅ Status: Premium Active\n"
+                f"📦 Plan: {doc.get('plan') or 'Premium'}\n"
+                f"📅 Active Till: {_fmt_date(until)}\n"
+                f"⏳ Days Left: {left}</b>")
+        label = "💎 Extend Premium"
+    else:
+        text = ("<b>💎 My Plan !!\n\n"
+                "❌ Status: No Active Plan\n\n"
+                "Get Premium To Skip The Short Links And Ads.</b>")
+        label = "💎 Get Premium"
+    await message.reply_text(text, reply_markup=InlineKeyboardMarkup(
+        [[InlineKeyboardButton(label, url=f"https://t.me/{username}/open")]]) if enabled() else None)
 
 
 @Client.on_message(filters.private & filters.regex(r"^/start premium$"), group=-1)
 async def start_premium(bot, message):
-    """t.me/<bot>?start=premium (the Mini App's Premium button) opens the plans screen."""
+    """t.me/<bot>?start=premium shows the plan status; buying happens in the Mini App."""
     message.stop_propagation()
-    await premium_cmd(bot, message)
-
-
-@Client.on_callback_query(filters.regex(r"^prem_plan:[0-9A-Za-z_-]{1,20}$"))
-async def plan_chosen(bot, query):
-    if not enabled():
-        return await query.answer("Premium Is Not Available Right Now.", show_alert=True)
-    uid = query.from_user.id
-    plan_id = query.data.split(":", 1)[1]
-    plan = TEST_PLAN if (plan_id == "test" and uid in ADMINS) else await _plans_col().find_one({"_id": plan_id})
-    if not plan:
-        return await query.answer("This Plan Is No Longer Available.", show_alert=True)
-    now = _now()
-    # same-amount orders may run together: payments are told apart in _check_orders (or by UTR)
-    # the user's own older pending order is replaced by this one
-    # Same plan, promo and points as a still-open app order: hand back that order (same QR and timer).
-    async for old in _orders_col().find({"status": "pending", "user": uid, "via": "app"}):
-        if (old.get("plan") == plan["_id"] and (old.get("promo") or None) == (q["promo"] or None)
-                and bool(old.get("points_used")) == bool(q["points"]) and old["expires"] > now
-                and not old.get("held") and not old.get("manual")):
-            try:
-                ruri = _upi_uri(int(old["amount"]), old["_id"])
-                rqr = _plain_qr_data_uri(ruri)
-            except Exception as e:
-                logger.warning(f"[PREMIUM] app QR reuse failed: {type(e).__name__}: {e}")
-                break
-            _ensure_poller(bot)
-            return {"order": old["_id"], "plan": old["plan_name"], "amount": _rupees(old["amount"]),
-                    "base": old.get("base_price", int(old["amount"])), "promo": old.get("promo"),
-                    "promo_off": old.get("promo_off", 0), "points": old.get("points_used", 0),
-                    "points_off": old.get("points_off", 0),
-                    "left": max(1, int((old["expires"] - now).total_seconds())), "upi": ruri, "qr": rqr}, None
-    async for old in _orders_col().find({"status": "pending", "user": uid}):
-        await _close(bot, old, "cancelled", "<b>❌ Order Replaced.</b>")
-    oid = secrets.token_hex(4)
-    expires = now + datetime.timedelta(minutes=EXPIRY_MIN)
-    try:
-        sent = await bot.send_photo(
-            query.message.chat.id, _qr_png(plan["price"], oid),
-            caption=_order_caption(plan["name"], plan["price"]), reply_markup=_order_markup(oid))
-    except Exception as e:
-        logger.warning(f"[PREMIUM] could not send the QR: {type(e).__name__}: {e}")
-        return await query.answer("Could Not Create The Order. Try Again.", show_alert=True)
-    await _orders_col().insert_one({
-        "_id": oid, "user": uid, "bot_id": BOT_ID, "chat": query.message.chat.id, "msg": sent.id,
-        "plan": plan["_id"], "plan_name": plan["name"], "days": plan["days"], "amount": str(plan["price"]),
-        "status": "pending", "created": now, "expires": expires,
-    })
-    await query.answer("Order Created.")
-    _ensure_poller(bot)
+    await myplan_cmd(bot, message)
 
 
 async def _close(bot, order, status, text):
@@ -891,7 +837,7 @@ async def _check_orders(bot):
             return
         for o in pending:
             if o["expires"] <= now - datetime.timedelta(minutes=3):
-                await _close(bot, o, "expired", "<b>⌛ Order Expired. Use /premium To Create A New One.</b>")
+                await _close(bot, o, "expired", "<b>⌛ Order Expired. Open Premium Plans To Create A New One.</b>")
         live = [o for o in pending if o["expires"] > now - datetime.timedelta(minutes=3)]
         if not live or not enabled():
             return
