@@ -48,14 +48,14 @@ async def start_bot_with_flood_wait():
 
 USER_COMMANDS = [
     BotCommand("start", "🚀 Start The Bot"),
-    BotCommand("premium", "💎 Premium Plans"),
+    BotCommand("myplan", "💎 My Plan"),
     BotCommand("support", "💬 Contact Support"),
 ]
 ADMIN_COMMANDS = [
     BotCommand("start", "🚀 Start The Bot"),
     BotCommand("link", "🔗 Create A File Link"),
     BotCommand("batch", "📦 Create A Batch Link"),
-    BotCommand("premium", "💎 Premium Plans"),
+    BotCommand("myplan", "💎 My Plan"),
     BotCommand("support", "💬 Contact Support"),
     BotCommand("broadcast", "📢 Send To All Users"),
     BotCommand("send", "✉️ Send To One User"),
@@ -72,7 +72,7 @@ ADMIN_COMMANDS = [
 
 
 async def set_command_menus(bot):
-    """Everyone sees only /start and /premium in the command menu; the owners and the admins added
+    """Everyone sees only /start, /myplan and /support in the command menu; the owners and the admins added
     from /settings see the full list. Commands still work when typed, this only changes the menu."""
     try:
         await bot.set_bot_commands(USER_COMMANDS, scope=BotCommandScopeDefault())
