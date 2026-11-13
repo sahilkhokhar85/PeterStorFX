@@ -29,6 +29,7 @@ from urllib.parse import quote, urlencode
 import pytz
 from pymongo.errors import DuplicateKeyError
 from pyrogram import Client, filters
+from pyrogram.raw import functions, types as rtypes
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import ADMINS, BOT_ID
@@ -49,7 +50,10 @@ LOOKBACK_HOURS = 24
 IST = pytz.timezone("Asia/Kolkata")
 
 # Owner-only test plan (₹1, 1 day): shown only to the ADMINS, never to users
-TEST_PLAN = {"_id": "test", "name": "Test (1 Day)", "days": 1, "price": 1}
+TEST_PLAN = {"_id": "test", "name": "Test (1 Day)", "days": 1, "price": 1, "stars": 1}
+
+# Telegram Stars price per plan (for users outside India); a plan document can override it with its own "stars" field
+STARS_DEFAULT = {"30": 50, "90": 130, "365": 400}
 
 # first start only; edit them later from the admin panel (step 2) or directly in MongoDB
 DEFAULT_PLANS = [
@@ -237,6 +241,7 @@ def _order_caption(plan_name, amount):
 def _order_markup(oid):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Check Payment", callback_data=f"prem_check:{oid}")],
+        [InlineKeyboardButton("⭐ Pay With Stars (Outside India)", callback_data=f"prem_stars:{oid}")],
         [InlineKeyboardButton("❌ Cancel Order", callback_data=f"prem_cancel:{oid}")],
     ])
 
@@ -422,6 +427,140 @@ async def adm_input(bot, message):
             f"<b>🧾 Paid Orders: {paid}</b>", reply_markup=_adm_panel_button())
 
 
+# ---------------------------------------------------------------- Telegram Stars (users outside India)
+def _stars_for(plan):
+    n = plan.get("stars") or STARS_DEFAULT.get(str(plan["_id"]))
+    return int(n) if n else max(1, int(plan["price"]))
+
+
+async def _plan_by_id(plan_id, uid):
+    if plan_id == "test":
+        return TEST_PLAN if uid in ADMINS else None
+    return await _plans_col().find_one({"_id": plan_id})
+
+
+def _stars_media(plan, uid):
+    n = _stars_for(plan)
+    media = rtypes.InputMediaInvoice(
+        title=f"Premium — {plan['name']}"[:32],
+        description=f"No-Ads Premium For {plan['days']} Days."[:255],
+        invoice=rtypes.Invoice(currency="XTR", prices=[rtypes.LabeledPrice(label=str(plan["name"])[:30], amount=n)]),
+        payload=f"ps:{uid}:{plan['_id']}".encode(),
+        provider_data=rtypes.DataJSON(data="{}"),
+    )
+    return media, n
+
+
+@Client.on_callback_query(filters.regex(r"^prem_stars:[0-9a-f]{8}$"))
+async def stars_button(bot, query):
+    uid = query.from_user.id
+    order = await _orders_col().find_one({"_id": query.data.split(":", 1)[1]})
+    if not order or order["user"] != uid or order["status"] != "pending":
+        return await query.answer("This Order Is No Longer Active.", show_alert=True)
+    plan = await _plan_by_id(str(order["plan"]), uid)
+    if not plan:
+        return await query.answer("This Plan Is No Longer Available.", show_alert=True)
+    media, n = _stars_media(plan, uid)
+    try:
+        await bot.invoke(functions.messages.SendMedia(
+            peer=await bot.resolve_peer(query.message.chat.id), media=media, message="", random_id=bot.rnd_id(),
+            reply_markup=rtypes.ReplyInlineMarkup(rows=[rtypes.KeyboardButtonRow(
+                buttons=[rtypes.KeyboardButtonBuy(text=f"Pay ⭐{n}")])])))
+    except Exception as e:
+        logger.warning(f"[PREMIUM] stars invoice failed: {type(e).__name__}: {e}")
+        return await query.answer("Could Not Open Stars Payment. Try Again.", show_alert=True)
+    await query.answer("Stars Invoice Sent ⭐")
+
+
+async def app_stars_link(bot, uid, plan_id):
+    """({"link", "stars"}, None) or (None, error code) - the invoice the Mini App opens with openInvoice."""
+    if not enabled():
+        return None, "disabled"
+    plan = await _plan_by_id(plan_id, uid)
+    if not plan:
+        return None, "plan"
+    media, n = _stars_media(plan, uid)
+    try:
+        res = await bot.invoke(functions.payments.ExportInvoice(invoice_media=media))
+    except Exception as e:
+        logger.warning(f"[PREMIUM] stars link failed: {type(e).__name__}: {e}")
+        return None, "stars"
+    return {"link": res.url, "stars": n}, None
+
+
+async def _stars_precheck(bot, upd):
+    ok = False
+    try:
+        kind, uid, pid = upd.payload.decode().split(":", 2)
+        plan = await _plan_by_id(pid, int(uid))
+        ok = bool(kind == "ps" and plan and int(uid) == upd.user_id and upd.currency == "XTR"
+                  and int(upd.total_amount) == _stars_for(plan))
+    except Exception:
+        ok = False
+    if ok:
+        await bot.invoke(functions.messages.SetBotPrecheckoutResults(query_id=upd.query_id, success=True))
+    else:
+        await bot.invoke(functions.messages.SetBotPrecheckoutResults(
+            query_id=upd.query_id, error="This Payment Is No Longer Valid. Please Try Again."))
+
+
+async def _stars_failed(bot, uid, charge, why):
+    for admin in ADMINS:
+        if isinstance(admin, int):
+            try:
+                await bot.send_message(
+                    admin, f"<b>⚠️ Stars Payment Received But Premium Not Activated !!</b>\n\n"
+                           f"<b>👤 User:</b> <code>{uid}</code>\n<b>🧾 Charge ID:</b> <code>{charge}</code>\n"
+                           f"<b>❗ Reason: {why}</b>")
+            except Exception:
+                pass
+
+
+async def _stars_paid(bot, act):
+    charge = act.charge.id
+    try:
+        await db.db.premium_stars.insert_one({"_id": charge, "ts": _now()})
+    except DuplicateKeyError:
+        return                                   # this payment was already handled
+    uid = 0
+    try:
+        kind, uid, pid = act.payload.decode().split(":", 2)
+        uid = int(uid)
+        plan = await _plan_by_id(pid, uid)
+        if kind != "ps" or not plan:
+            return await _stars_failed(bot, uid, charge, "Plan Not Found")
+        now = _now()
+        order = {"_id": secrets.token_hex(4), "user": uid, "bot_id": BOT_ID, "plan": plan["_id"],
+                 "plan_name": plan["name"], "days": plan["days"], "amount": str(plan["price"]),
+                 "status": "paid", "via": "stars", "stars": int(act.total_amount), "created": now,
+                 "expires": now, "paid": now}
+        await _orders_col().insert_one(order)
+        name = "-"
+        try:
+            name = (await bot.get_users(uid)).first_name or "-"
+        except Exception:
+            pass
+        await _activate(bot, order, {"utr": charge, "ts": now, "name": name, "stars": int(act.total_amount)})
+        async for old in _orders_col().find({"status": "pending", "user": uid}):
+            await _close(bot, old, "cancelled", "<b>✅ Paid With Stars.</b>")
+    except Exception as e:
+        logger.warning(f"[PREMIUM] stars payment failed: {type(e).__name__}: {e}")
+        await _stars_failed(bot, uid, charge, f"{type(e).__name__}")
+
+
+@Client.on_raw_update(group=-3)
+async def stars_raw(bot, update, users, chats):
+    try:
+        if isinstance(update, rtypes.UpdateBotPrecheckoutQuery):
+            await _stars_precheck(bot, update)
+        elif isinstance(update, (rtypes.UpdateNewMessage, rtypes.UpdateNewChannelMessage)):
+            act = getattr(update.message, "action", None)
+            if isinstance(act, rtypes.MessageActionPaymentSentMe):
+                await _stars_paid(bot, act)
+    except Exception as e:
+        logger.warning(f"[PREMIUM] stars update error: {type(e).__name__}: {e}")
+
+
 # ---------------------------------------------------------------- user flow
 @Client.on_message(filters.command("premium") & filters.private)
 async def premium_cmd(bot, message):
@@ -558,7 +697,8 @@ async def app_plans(uid):
     plans = await get_plans()
     if uid in ADMINS:
         plans = plans + [TEST_PLAN]
-    return [{"id": p["_id"], "name": p["name"], "days": p["days"], "price": _rupees(p["price"])} for p in plans]
+    return [{"id": p["_id"], "name": p["name"], "days": p["days"], "price": _rupees(p["price"]),
+             "stars": _stars_for(p)} for p in plans]
 
 
 async def app_create_order(bot, uid, plan_id, promo=None, use_points=False):
@@ -705,7 +845,7 @@ async def _activate(bot, order, pay, tag="PremiumPurchased"):
             await bot.edit_message_caption(order["chat"], order["msg"], done_text, reply_markup=None)
         except Exception:
             pass
-    elif order.get("via") == "app":
+    elif order.get("via") in ("app", "stars"):
         try:
             await bot.send_message(order["user"], done_text)
         except Exception:
@@ -721,6 +861,16 @@ async def _activate(bot, order, pay, tag="PremiumPurchased"):
         f"<b>🙍 Payer: {pay['name'] or '-'}</b>\n"
         f"<b>📅 Till: {_fmt_date(until)}</b>"
     )
+    if pay.get("stars"):
+        text = (
+            f"<b>💎 #{tag} (Stars)</b>\n\n"
+            f"<b>👤 User:</b> {who}\n"
+            f"<b>📦 Plan: {order['plan_name']}</b>\n"
+            f"<b>⭐ Stars: {pay['stars']}</b>\n"
+            f"<b>🧾 Charge ID:</b> <code>{pay['utr']}</code>\n"
+            f"<b>🙍 Name: {pay['name'] or '-'}</b>\n"
+            f"<b>📅 Till: {_fmt_date(until)}</b>"
+        )
     for admin in ADMINS:
         if isinstance(admin, int):
             try:
