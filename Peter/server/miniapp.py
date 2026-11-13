@@ -200,6 +200,22 @@ async def miniapp_order_cancel(request):
     return web.json_response({"ok": True}, headers=_cors())
 
 
+async def miniapp_stars(request):
+    """Telegram Stars invoice link for a plan (the Mini App opens it with openInvoice)."""
+    uid, body, err = await _auth(request)
+    if err:
+        return err
+    from Peter.bot import StreamBot
+    from plugins.premium import app_stars_link
+    plan = str(body.get("plan") or "")
+    if not re.match(r"^[0-9A-Za-z_-]{1,20}$", plan):
+        return web.json_response({"ok": False, "error": "plan"}, status=400, headers=_cors())
+    res, code = await app_stars_link(StreamBot, uid, plan)
+    if not res:
+        return web.json_response({"ok": False, "error": code}, headers=_cors())
+    return web.json_response({"ok": True, **res}, headers=_cors())
+
+
 async def miniapp_status(request):
     """Account state for the Mini App when it is opened without a link (bot's Premium button)."""
     uid, body, err = await _auth(request)
