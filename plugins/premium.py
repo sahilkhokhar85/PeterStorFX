@@ -528,6 +528,7 @@ async def app_stars_link(bot, uid, plan_id):
     plan = await _plan_by_id(plan_id, uid)
     if not plan:
         return None, "plan"
+    _stars_ensure(bot)
     media, n = _stars_media(plan, uid)
     try:
         res = await bot.invoke(functions.payments.ExportInvoice(invoice_media=media))
@@ -596,6 +597,73 @@ async def _stars_paid(bot, act):
     except Exception as e:
         logger.warning(f"[PREMIUM] stars payment failed: {type(e).__name__}: {e}")
         await _stars_failed(bot, uid, charge, f"{type(e).__name__}")
+
+
+# ---- Bot API side channel (pre-checkout + payment) -- works even if raw updates don't arrive
+_SPOLL = {"task": None}
+
+
+async def _stars_valid(from_id, payload, currency, total):
+    try:
+        kind, uid, pid = payload.split(":", 2)
+        plan = await _plan_by_id(pid, int(uid))
+        return bool(kind == "ps" and plan and int(uid) == from_id and currency == "XTR"
+                    and int(total) == _stars_for(plan))
+    except Exception:
+        return False
+
+
+async def _stars_poll(bot):
+    import aiohttp
+    from types import SimpleNamespace
+    from config import BOT_TOKEN
+    base = f"https://api.telegram.org/bot{BOT_TOKEN}/"
+    offset = 0
+    logger.info("[PREMIUM] stars poller started")
+    async with aiohttp.ClientSession() as http:
+        while True:
+            try:
+                async with http.post(base + "getUpdates", json={
+                        "offset": offset, "timeout": 25,
+                        "allowed_updates": ["pre_checkout_query", "message"]},
+                        timeout=aiohttp.ClientTimeout(total=40)) as r:
+                    data = await r.json()
+                if not data.get("ok"):
+                    logger.warning(f"[PREMIUM] stars poll error: {data.get('description')}")
+                    await asyncio.sleep(10)
+                    continue
+                for u in data.get("result", []):
+                    offset = u["update_id"] + 1
+                    q = u.get("pre_checkout_query")
+                    if q:
+                        ok = await _stars_valid(q["from"]["id"], q.get("invoice_payload", ""),
+                                                q.get("currency"), q.get("total_amount", 0))
+                        logger.info(f"[PREMIUM] stars pre-checkout (api) from {q['from']['id']} valid={ok}")
+                        body = {"pre_checkout_query_id": q["id"], "ok": ok}
+                        if not ok:
+                            body["error_message"] = "This Payment Is No Longer Valid. Please Try Again."
+                        async with http.post(base + "answerPreCheckoutQuery", json=body) as rr:
+                            await rr.read()
+                        continue
+                    sp = (u.get("message") or {}).get("successful_payment")
+                    if sp:
+                        logger.info(f"[PREMIUM] stars payment received (api): {sp.get('total_amount')} {sp.get('currency')}")
+                        act = SimpleNamespace(
+                            charge=SimpleNamespace(id=sp["telegram_payment_charge_id"]),
+                            payload=sp["invoice_payload"].encode(),
+                            total_amount=sp["total_amount"])
+                        await _stars_paid(bot, act)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"[PREMIUM] stars poll exception: {type(e).__name__}: {e}")
+                await asyncio.sleep(5)
+
+
+def _stars_ensure(bot):
+    t = _SPOLL.get("task")
+    if t is None or t.done():
+        _SPOLL["task"] = asyncio.create_task(_stars_poll(bot))
 
 
 @Client.on_raw_update(group=-7)
