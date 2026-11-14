@@ -315,6 +315,38 @@ async def _adm_list(page):
     return text, InlineKeyboardMarkup(rows)
 
 
+_RM_PAGE = 8
+
+
+async def _adm_rm_list(bot, page):
+    """Remove Premium: the active users as buttons (no typing the ID)."""
+    q = {"expires": {"$gt": _now()}}
+    total = await _users_col().count_documents(q)
+    pages = max(1, (total + _RM_PAGE - 1) // _RM_PAGE)
+    page = min(max(page, 0), pages - 1)
+    docs = await _users_col().find(q).sort("expires", 1).skip(page * _RM_PAGE).limit(_RM_PAGE).to_list(length=_RM_PAGE)
+    names = {}
+    if docs:
+        try:
+            for u in await bot.get_users([d["_id"] for d in docs]):
+                names[u.id] = (u.first_name or "").strip()
+        except Exception:
+            pass
+    rows = []
+    for d in docs:
+        who = (names.get(d["_id"]) or str(d["_id"]))[:16]
+        rows.append([InlineKeyboardButton(f"👤 {who} · {_short_date(d['expires'])}", callback_data=f"padm:rmsel:{d['_id']}")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀ Prev", callback_data=f"padm:rml:{page - 1}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton("Next ▶", callback_data=f"padm:rml:{page + 1}"))
+    rows += ([nav] if nav else []) + [[InlineKeyboardButton("🔙 Back", callback_data="padm:home")]]
+    head = f"<b>➖ Remove Premium ({page + 1}/{pages}) !!</b>\n\n"
+    body = "<b>Tap A User To Remove.</b>" if docs else "<b>No Active Premium Users !!</b>"
+    return head + body, InlineKeyboardMarkup(rows)
+
+
 @Client.on_message(filters.command("padmin") & filters.private)
 async def padmin_cmd(bot, message):
     if not message.from_user or message.from_user.id not in ADMINS:
@@ -323,7 +355,7 @@ async def padmin_cmd(bot, message):
     await message.reply_text(await _adm_home_text(), reply_markup=_adm_home_markup())
 
 
-@Client.on_callback_query(filters.regex(r"^padm:(home|grant|remove|check|close|list:[0-9]{1,4}|rmyes:[0-9]{5,15}|gryes:[0-9]{5,15}:[0-9]{1,4})$"))
+@Client.on_callback_query(filters.regex(r"^padm:(home|grant|remove|check|close|list:[0-9]{1,4}|rmyes:[0-9]{5,15}|rml:[0-9]{1,4}|rmsel:[0-9]{5,15}|gryes:[0-9]{5,15}:[0-9]{1,4})$"))
 async def adm_cb(bot, query):
     uid = query.from_user.id
     if uid not in ADMINS:
@@ -340,15 +372,32 @@ async def adm_cb(bot, query):
         _ADM_WAIT.pop(uid, None)
         await query.answer()
         return await query.message.edit_text(await _adm_home_text(), reply_markup=_adm_home_markup())
-    if act in ("grant", "remove", "check"):
+    if act in ("grant", "check"):
         _ADM_WAIT[uid] = act
         await query.answer()
         prompt = {
             "grant": "<b>➕ Grant Premium !!</b>\n\n<b>Send Telegram ID And Days.</b>\n<b>Example:</b> <code>123456789 30</code>",
-            "remove": "<b>➖ Remove Premium !!</b>\n\n<b>Send The Telegram ID.</b>",
             "check": "<b>🔍 Check User !!</b>\n\n<b>Send The Telegram ID.</b>",
         }[act]
         return await query.message.edit_text(prompt, reply_markup=_adm_cancel_markup())
+    if act == "remove" or act.startswith("rml:"):
+        _ADM_WAIT.pop(uid, None)
+        await query.answer()
+        text, markup = await _adm_rm_list(bot, int(act.split(":")[1]) if ":" in act else 0)
+        return await query.message.edit_text(text, reply_markup=markup)
+    if act.startswith("rmsel:"):
+        tid = int(act.split(":")[1])
+        await query.answer()
+        until = await premium_until(tid)
+        if not until:
+            return await query.message.edit_text("<b>User Is Not Premium !!</b>", reply_markup=_adm_panel_button())
+        doc = await _users_col().find_one({"_id": tid}) or {}
+        return await query.message.edit_text(
+            f"<b>➖ Remove Premium !!\n\n👤 User:</b> <code>{tid}</code>\n"
+            f"<b>📦 Plan: {doc.get('plan') or '-'}\n📅 Till: {_fmt_date(until)}</b>",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Yes, Remove", callback_data=f"padm:rmyes:{tid}"),
+                InlineKeyboardButton("❌ Cancel", callback_data="padm:rml:0")]]))
     if act.startswith("list:"):
         await query.answer()
         text, markup = await _adm_list(int(act.split(":")[1]))
