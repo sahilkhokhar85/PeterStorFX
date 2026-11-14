@@ -546,6 +546,7 @@ async def _stars_precheck(bot, upd):
                   and int(upd.total_amount) == _stars_for(plan))
     except Exception:
         ok = False
+    logger.info(f"[PREMIUM] stars pre-checkout valid={ok}")
     if ok:
         await bot.invoke(functions.messages.SetBotPrecheckoutResults(query_id=upd.query_id, success=True))
     else:
@@ -601,10 +602,12 @@ async def _stars_paid(bot, act):
 async def stars_raw(bot, update, users, chats):
     try:
         if isinstance(update, rtypes.UpdateBotPrecheckoutQuery):
+            logger.info(f"[PREMIUM] stars pre-checkout from {update.user_id}: {update.total_amount} {update.currency}")
             await _stars_precheck(bot, update)
         elif isinstance(update, (rtypes.UpdateNewMessage, rtypes.UpdateNewChannelMessage)):
             act = getattr(update.message, "action", None)
             if isinstance(act, rtypes.MessageActionPaymentSentMe):
+                logger.info(f"[PREMIUM] stars payment received: {act.total_amount} {act.currency}")
                 await _stars_paid(bot, act)
     except Exception as e:
         logger.warning(f"[PREMIUM] stars update error: {type(e).__name__}: {e}")
