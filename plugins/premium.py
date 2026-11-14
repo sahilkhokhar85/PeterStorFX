@@ -371,7 +371,13 @@ def _adm_waiting(_, __, m):
 
 @Client.on_message(filters.private & filters.create(_adm_waiting), group=-6)
 async def adm_input(bot, message):
-    message.stop_propagation()
+    try:
+        await _adm_input(bot, message)
+    finally:
+        message.stop_propagation()      # raises, so it has to come after the work
+
+
+async def _adm_input(bot, message):
     uid = message.from_user.id
     mode = _ADM_WAIT.get(uid)
     text = (message.text or "").strip()
@@ -567,8 +573,10 @@ async def myplan_cmd(bot, message):
 @Client.on_message(filters.private & filters.regex(r"^/start premium$"), group=-1)
 async def start_premium(bot, message):
     """t.me/<bot>?start=premium shows the plan status; buying happens in the Mini App."""
-    message.stop_propagation()
-    await myplan_cmd(bot, message)
+    try:
+        await myplan_cmd(bot, message)
+    finally:
+        message.stop_propagation()
 
 
 async def _close(bot, order, status, text):
