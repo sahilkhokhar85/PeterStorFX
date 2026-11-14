@@ -369,7 +369,7 @@ def _adm_waiting(_, __, m):
     return bool(u and u.id in ADMINS and u.id in _ADM_WAIT and m.text and not m.text.startswith("/"))
 
 
-@Client.on_message(filters.private & filters.create(_adm_waiting), group=-2)
+@Client.on_message(filters.private & filters.create(_adm_waiting), group=-6)
 async def adm_input(bot, message):
     message.stop_propagation()
     uid = message.from_user.id
@@ -526,7 +526,7 @@ async def _stars_paid(bot, act):
         await _stars_failed(bot, uid, charge, f"{type(e).__name__}")
 
 
-@Client.on_raw_update(group=-3)
+@Client.on_raw_update(group=-7)
 async def stars_raw(bot, update, users, chats):
     try:
         if isinstance(update, rtypes.UpdateBotPrecheckoutQuery):
