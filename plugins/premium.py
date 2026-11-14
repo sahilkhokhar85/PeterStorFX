@@ -305,7 +305,7 @@ async def _adm_list(page):
     docs = await _users_col().find(q).sort("expires", 1).skip(page * _ADM_PAGE).limit(_ADM_PAGE).to_list(length=_ADM_PAGE)
     lines = [f"<b>{page * _ADM_PAGE + i}.</b> <code>{d['_id']}</code> · {d.get('plan') or '-'} · {_short_date(d['expires'])}"
              for i, d in enumerate(docs, 1)]
-    text = f"<b>📋 Active Premium ({page + 1}/{pages})</b>\n\n" + ("\n".join(lines) if lines else "<b>No Active Premium Users !!</b>")
+    text = f"<b>📋 Active Premium ({page + 1}/{pages}) !!</b>\n\n" + ("\n".join(lines) if lines else "<b>No Active Premium Users !!</b>")
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("◀ Prev", callback_data=f"padm:list:{page - 1}"))
@@ -323,7 +323,7 @@ async def padmin_cmd(bot, message):
     await message.reply_text(await _adm_home_text(), reply_markup=_adm_home_markup())
 
 
-@Client.on_callback_query(filters.regex(r"^padm:(home|grant|remove|check|close|list:[0-9]{1,4}|rmyes:[0-9]{5,15})$"))
+@Client.on_callback_query(filters.regex(r"^padm:(home|grant|remove|check|close|list:[0-9]{1,4}|rmyes:[0-9]{5,15}|gryes:[0-9]{5,15}:[0-9]{1,4})$"))
 async def adm_cb(bot, query):
     uid = query.from_user.id
     if uid not in ADMINS:
@@ -353,6 +353,29 @@ async def adm_cb(bot, query):
         await query.answer()
         text, markup = await _adm_list(int(act.split(":")[1]))
         return await query.message.edit_text(text, reply_markup=markup)
+    if act.startswith("gryes:"):
+        _, tid, days = act.split(":")
+        tid, days = int(tid), int(days)
+        if not 1 <= days <= 3650:
+            return await query.answer("Wrong Days.", show_alert=True)
+        await query.answer()
+        now = _now()
+        doc = await _users_col().find_one({"_id": tid})
+        base = doc["expires"] if doc and doc.get("expires") and doc["expires"] > now else now
+        until = base + datetime.timedelta(days=days)
+        await _users_col().update_one(
+            {"_id": tid},
+            {"$set": {"expires": until, "plan": "Admin Grant", "granted_by": uid, "granted": now},
+             "$setOnInsert": {"since": now}},
+            upsert=True)
+        out = (f"<b>✅ Premium Granted !!\n\n👤 User:</b> <code>{tid}</code>\n"
+               f"<b>📅 Days: +{days}\n📅 Active Till: {_fmt_date(until)}</b>")
+        try:
+            await bot.send_message(tid, f"<b>🎁 Premium Activated !!\n\n💎 +{days} Days Added\n"
+                                        f"📅 Active Till: {_fmt_date(until)}</b>")
+        except Exception:
+            out += "\n\n<b>⚠️ Could Not Message The User !!</b>"
+        return await query.message.edit_text(out, reply_markup=_adm_panel_button())
     if act.startswith("rmyes:"):
         tid = int(act.split(":")[1])
         await query.answer()
@@ -392,19 +415,12 @@ async def _adm_input(bot, message):
         doc = await _users_col().find_one({"_id": tid})
         base = doc["expires"] if doc and doc.get("expires") and doc["expires"] > now else now
         until = base + datetime.timedelta(days=days)
-        await _users_col().update_one(
-            {"_id": tid},
-            {"$set": {"expires": until, "plan": "Admin Grant", "granted_by": uid, "granted": now},
-             "$setOnInsert": {"since": now}},
-            upsert=True)
-        out = (f"<b>✅ Premium Granted !!</b>\n\n<b>👤 User:</b> <code>{tid}</code>\n"
-               f"<b>📅 Days: +{days}</b>\n<b>📅 Active Till: {_fmt_date(until)}</b>")
-        try:
-            await bot.send_message(tid, f"<b>🎁 Premium Activated !!</b>\n\n<b>💎 +{days} Days Added</b>\n"
-                                        f"<b>📅 Active Till: {_fmt_date(until)}</b>")
-        except Exception:
-            out += "\n\n<b>⚠️ Could Not Message The User !!</b>"
-        return await message.reply_text(out, reply_markup=_adm_panel_button())
+        return await message.reply_text(
+            f"<b>➕ Grant Premium !!\n\n👤 User:</b> <code>{tid}</code>\n"
+            f"<b>📅 Days: +{days}\n📅 Active Till: {_fmt_date(until)}</b>",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Yes, Grant", callback_data=f"padm:gryes:{tid}:{days}"),
+                InlineKeyboardButton("❌ Cancel", callback_data="padm:home")]]))
     if mode in ("remove", "check"):
         if not re.fullmatch(r"[0-9]{5,15}", text):
             return await message.reply_text("<b>Send Only The Telegram ID !!</b>", reply_markup=_adm_cancel_markup())
@@ -416,7 +432,7 @@ async def _adm_input(bot, message):
             if not until:
                 return await message.reply_text("<b>User Is Not Premium !!</b>", reply_markup=_adm_panel_button())
             return await message.reply_text(
-                f"<b>➖ Remove Premium ?</b>\n\n<b>👤 User:</b> <code>{tid}</code>\n"
+                f"<b>➖ Remove Premium !!</b>\n\n<b>👤 User:</b> <code>{tid}</code>\n"
                 f"<b>📦 Plan: {doc.get('plan') or '-'}</b>\n<b>📅 Till: {_fmt_date(until)}</b>",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("✅ Yes, Remove", callback_data=f"padm:rmyes:{tid}"),
@@ -427,7 +443,7 @@ async def _adm_input(bot, message):
         status = f"✅ Active Till {_fmt_date(until)}" if until else "❌ Not Active"
         last = _fmt_date(doc["last_paid"]) if doc.get("last_paid") else "-"
         return await message.reply_text(
-            f"<b>🔍 User Info</b>\n\n<b>👤 User:</b> <code>{tid}</code>\n<b>💎 Status: {status}</b>\n"
+            f"<b>🔍 User Info !!</b>\n\n<b>👤 User:</b> <code>{tid}</code>\n<b>💎 Status: {status}</b>\n"
             f"<b>📦 Plan: {doc.get('plan') or '-'}</b>\n<b>💳 Last Paid: {last}</b>\n"
             f"<b>🧾 Paid Orders: {paid}</b>", reply_markup=_adm_panel_button())
 
