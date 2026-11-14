@@ -1135,4 +1135,7 @@ async def payment_loop(bot):
         await asyncio.sleep(POLL_SECONDS)
 
 
-start_poller = _ensure_poller   # called once from bot.py so pending orders survive a restart
+def start_poller(bot):
+    """Called once from bot.py at startup: UPI order checker + Stars listener, both ready before any user pays."""
+    _ensure_poller(bot)
+    _stars_ensure(bot)
