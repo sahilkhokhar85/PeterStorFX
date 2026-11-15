@@ -751,6 +751,13 @@ async def _pay_listen(bot):
                             {"$set": {"status": "paid", "charge": sp["telegram_payment_charge_id"],
                                       "total": sp["total_amount"], "paid_at": _now()}})
                         logger.info(f"[PREMIUM] pay bot payment received {sp.get('total_amount')} XTR recorded={bool(res)}")
+                        # Telegram posts a "You successfully transferred..." line in the pay bot chat: remove it
+                        try:
+                            m = u["message"]
+                            dr = await _pay_api(http, "deleteMessage", {"chat_id": m["chat"]["id"], "message_id": m["message_id"]})
+                            logger.info(f"[PREMIUM] pay bot service message removed={dr.get('ok')} {dr.get('description') or ''}")
+                        except Exception:
+                            pass
                         if not res:
                             for admin in ADMINS:
                                 if isinstance(admin, int):
