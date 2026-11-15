@@ -45,6 +45,10 @@ IMAP_HOST = os.environ.get("IMAP_HOST", "imap.gmail.com").strip()
 IMAP_PORT = int(os.environ.get("IMAP_PORT", "993") or 993)
 SENDER = os.environ.get("IMAP_SENDER_FILTER", "no-reply@famapp.in").strip()
 EXPIRY_MIN = int(os.environ.get("PAY_EXPIRY_MINUTES", "15") or 15)
+# Stars go through ONE separate payments-only bot, so every bot's Stars land in a single balance.
+PAY_BOT_TOKEN = os.environ.get("PAY_BOT_TOKEN", "").strip()
+PAY_LEADER = os.environ.get("PAY_LEADER", "").strip() == "1"     # exactly ONE bot listens to the pay bot
+PAY_DB = os.environ.get("PAY_DB", "stars_pay").strip() or "stars_pay"
 POLL_SECONDS = 5
 LOOKBACK_HOURS = 24
 IST = pytz.timezone("Asia/Kolkata")
@@ -528,6 +532,14 @@ async def app_stars_link(bot, uid, plan_id):
     plan = await _plan_by_id(plan_id, uid)
     if not plan:
         return None, "plan"
+    if PAY_BOT_TOKEN:
+        _pay_ensure(bot)
+        try:
+            link, n = await _pay_invoice(plan, uid)
+        except Exception as e:
+            logger.warning(f"[PREMIUM] pay bot link failed: {type(e).__name__}: {e}")
+            return None, "stars"
+        return ({"link": link, "stars": n}, None) if link else (None, "stars")
     _stars_ensure(bot)
     media, n = _stars_media(plan, uid)
     try:
@@ -568,22 +580,29 @@ async def _stars_failed(bot, uid, charge, why):
 
 
 async def _stars_paid(bot, act):
-    charge = act.charge.id
+    try:
+        kind, uid, pid = act.payload.decode().split(":", 2)
+        uid = int(uid)
+    except Exception:
+        return
+    if kind != "ps":
+        return
+    await _stars_grant(bot, uid, pid, act.charge.id, int(act.total_amount))
+
+
+async def _stars_grant(bot, uid, pid, charge, total):
     try:
         await db.db.premium_stars.insert_one({"_id": charge, "ts": _now()})
     except DuplicateKeyError:
         return                                   # this payment was already handled
-    uid = 0
     try:
-        kind, uid, pid = act.payload.decode().split(":", 2)
-        uid = int(uid)
         plan = await _plan_by_id(pid, uid)
-        if kind != "ps" or not plan:
+        if not plan:
             return await _stars_failed(bot, uid, charge, "Plan Not Found")
         now = _now()
         order = {"_id": secrets.token_hex(4), "user": uid, "bot_id": BOT_ID, "plan": plan["_id"],
                  "plan_name": plan["name"], "days": plan["days"], "amount": str(plan["price"]),
-                 "status": "paid", "via": "stars", "stars": int(act.total_amount), "created": now,
+                 "status": "paid", "via": "stars", "stars": int(total), "created": now,
                  "expires": now, "paid": now}
         await _orders_col().insert_one(order)
         name = "-"
@@ -591,7 +610,7 @@ async def _stars_paid(bot, act):
             name = (await bot.get_users(uid)).first_name or "-"
         except Exception:
             pass
-        await _activate(bot, order, {"utr": charge, "ts": now, "name": name, "stars": int(act.total_amount)})
+        await _activate(bot, order, {"utr": charge, "ts": now, "name": name, "stars": int(total)})
         async for old in _orders_col().find({"status": "pending", "user": uid}):
             await _close(bot, old, "cancelled", "<b>✅ Paid With Stars.</b>")
     except Exception as e:
@@ -664,6 +683,118 @@ def _stars_ensure(bot):
     t = _SPOLL.get("task")
     if t is None or t.done():
         _SPOLL["task"] = asyncio.create_task(_stars_poll(bot))
+
+
+# ---- Separate pay bot: invoices are made by it, Stars land in ITS balance, the right bot then activates
+def _pay_col():
+    return db._client[PAY_DB].invoices
+
+
+async def _pay_api(http, method, body):
+    async with http.post(f"https://api.telegram.org/bot{PAY_BOT_TOKEN}/{method}", json=body) as r:
+        return await r.json()
+
+
+async def _pay_invoice(plan, uid):
+    """Create the invoice on the pay bot. Returns (link, stars) or (None, None)."""
+    import aiohttp
+    n = _stars_for(plan)
+    token = secrets.token_urlsafe(12)
+    await _pay_col().insert_one({"_id": token, "uid": int(uid), "bot_id": BOT_ID, "plan": plan["_id"],
+                                 "stars": n, "status": "open", "ts": _now()})
+    body = {"title": f"Premium — {plan['name']}"[:32],
+            "description": f"No-Ads Premium For {plan['days']} Days."[:255],
+            "payload": token, "currency": "XTR",
+            "prices": [{"label": str(plan["name"])[:30], "amount": n}]}
+    async with aiohttp.ClientSession() as http:
+        res = await _pay_api(http, "createInvoiceLink", body)
+    if not res.get("ok"):
+        logger.warning(f"[PREMIUM] pay bot invoice failed: {res.get('description')}")
+        return None, None
+    return res["result"], n
+
+
+async def _pay_listen(bot):
+    """Leader only: answers the pay bot's pre-checkout and records finished payments in the shared DB."""
+    import aiohttp
+    offset = 0
+    logger.info("[PREMIUM] pay bot listener started")
+    async with aiohttp.ClientSession() as http:
+        while True:
+            try:
+                async with http.post(f"https://api.telegram.org/bot{PAY_BOT_TOKEN}/getUpdates", json={
+                        "offset": offset, "timeout": 25,
+                        "allowed_updates": ["pre_checkout_query", "message"]},
+                        timeout=aiohttp.ClientTimeout(total=40)) as r:
+                    data = await r.json()
+                if not data.get("ok"):
+                    logger.warning(f"[PREMIUM] pay bot poll error: {data.get('description')}")
+                    await asyncio.sleep(10)
+                    continue
+                for u in data.get("result", []):
+                    offset = u["update_id"] + 1
+                    q = u.get("pre_checkout_query")
+                    if q:
+                        inv = await _pay_col().find_one({"_id": q.get("invoice_payload", "")})
+                        ok = bool(inv and inv.get("status") == "open" and inv["uid"] == q["from"]["id"]
+                                  and q.get("currency") == "XTR" and int(q.get("total_amount", 0)) == inv["stars"])
+                        logger.info(f"[PREMIUM] pay bot pre-checkout from {q['from']['id']} valid={ok}")
+                        body = {"pre_checkout_query_id": q["id"], "ok": ok}
+                        if not ok:
+                            body["error_message"] = "This Payment Is No Longer Valid. Please Try Again."
+                        await _pay_api(http, "answerPreCheckoutQuery", body)
+                        continue
+                    sp = (u.get("message") or {}).get("successful_payment")
+                    if sp:
+                        res = await _pay_col().find_one_and_update(
+                            {"_id": sp.get("invoice_payload", ""), "status": "open"},
+                            {"$set": {"status": "paid", "charge": sp["telegram_payment_charge_id"],
+                                      "total": sp["total_amount"], "paid_at": _now()}})
+                        logger.info(f"[PREMIUM] pay bot payment received {sp.get('total_amount')} XTR recorded={bool(res)}")
+                        if not res:
+                            for admin in ADMINS:
+                                if isinstance(admin, int):
+                                    try:
+                                        await bot.send_message(
+                                            admin, "<b>⚠️ Stars Payment Received But Not Recorded !!</b>\n\n"
+                                                   f"<b>🧾 Charge ID:</b> <code>{sp['telegram_payment_charge_id']}</code>")
+                                    except Exception:
+                                        pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"[PREMIUM] pay bot listener exception: {type(e).__name__}: {e}")
+                await asyncio.sleep(5)
+
+
+async def _pay_claim(bot):
+    """Every bot: picks up paid invoices that belong to THIS bot and activates premium here."""
+    try:
+        await _pay_col().create_index([("bot_id", 1), ("status", 1)])
+    except Exception:
+        pass
+    while True:
+        try:
+            inv = await _pay_col().find_one_and_update(
+                {"bot_id": BOT_ID, "status": "paid"}, {"$set": {"status": "claimed"}})
+            if inv:
+                await _stars_grant(bot, inv["uid"], inv["plan"], inv["charge"], int(inv["total"]))
+                continue
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[PREMIUM] pay claim error: {type(e).__name__}: {e}")
+        await asyncio.sleep(2)
+
+
+_PAYTASKS = {}
+
+
+def _pay_ensure(bot):
+    for name, fn, on in (("claim", _pay_claim, True), ("listen", _pay_listen, PAY_LEADER)):
+        t = _PAYTASKS.get(name)
+        if on and (t is None or t.done()):
+            _PAYTASKS[name] = asyncio.create_task(fn(bot))
 
 
 @Client.on_raw_update(group=-7)
@@ -1138,4 +1269,7 @@ async def payment_loop(bot):
 def start_poller(bot):
     """Called once from bot.py at startup: UPI order checker + Stars listener, both ready before any user pays."""
     _ensure_poller(bot)
-    _stars_ensure(bot)
+    if PAY_BOT_TOKEN:
+        _pay_ensure(bot)
+    else:
+        _stars_ensure(bot)
