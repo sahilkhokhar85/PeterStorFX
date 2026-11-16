@@ -224,6 +224,11 @@ async def miniapp_status(request):
     from plugins.premium import app_account, enabled
     st = await app_account(uid)
     st["enabled"] = bool(enabled())
+    try:
+        from config import ADMINS
+        st["admin"] = int(uid) in [a for a in ADMINS if isinstance(a, int)]
+    except Exception:
+        st["admin"] = False
     return web.json_response({"ok": True, **st}, headers=_cors())
 
 
