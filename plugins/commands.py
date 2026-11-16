@@ -12,6 +12,30 @@ from plugins.force_sub import not_joined_channels, force_sub_join_buttons, get_m
 from Peter.server.streamer import build_stream_urls, STREAM_LINK_HOURS
 from Peter.utils.cover_copy import copy_keep_cover as _copy_media
 from Peter.utils.pending_deletes import run_delete
+
+
+# Premium users get a longer auto-delete time (default 2 hours, env PREMIUM_DELETE_SECONDS)
+PREMIUM_DELETE_SECONDS = int(os.environ.get("PREMIUM_DELETE_SECONDS", "7200") or 7200)
+
+
+async def _del_time(settings, user_id):
+    """Auto-delete delay in seconds for this user (premium gets the longer one)."""
+    base = settings.get("auto_delete_time", 1800)
+    try:
+        from plugins.premium import is_premium
+        if await is_premium(user_id):
+            return max(base, PREMIUM_DELETE_SECONDS)
+    except Exception:
+        pass
+    return base
+
+
+def _dur_txt(secs):
+    m = max(1, int(secs) // 60)
+    if m >= 60 and m % 60 == 0:
+        h = m // 60
+        return f"{h} Hour{'s' if h > 1 else ''}"
+    return f"{m} Minutes"
 try:
     from Peter.bot import NO_SIGN
 except ImportError:
@@ -458,14 +482,15 @@ async def _start_inner(client, message, sts):
                     )
 
                     if settings.get("auto_delete", True):
-                        del_minutes = max(1, settings.get("auto_delete_time", 1800) // 60)
+                        del_secs = await _del_time(settings, message.from_user.id)
+                        del_txt = _dur_txt(del_secs)
 
                         tok = await _again_token(message.from_user.id, data)
 
                         k = await client.send_message(
                             chat_id=message.from_user.id,
                             text=f"<b>🔔 Just a Quick Reminder !!\n\n"
-                            f"⏳ This Content Will Be Automatically Deleted After <u>{del_minutes} Minutes</u> Due to Copyright Issues.\n\n"
+                            f"⏳ This Content Will Be Automatically Deleted After <u>{del_txt}</u> Due to Copyright Issues.\n\n"
                             + (f"⚡ Fast Download & Watch Links Stay Valid For <u>{STREAM_LINK_HOURS} Hours</u>.\n\n" if STREAM_MODE else "") +
                             (_AGAIN_TXT if tok else _OPEN_TXT) +
                             f"📌 Want to Keep It? Save or Forward It to your Saved Messages Before It Expires. 👍\n\n"
@@ -476,7 +501,7 @@ async def _start_inner(client, message, sts):
 
                         _spawn(
                             _delete_single_later(
-                                settings.get("auto_delete_time", 1800),
+                                del_secs,
                                 del_msg,
                                 k,
                                 tok
@@ -687,12 +712,13 @@ async def _start_inner(client, message, sts):
             pass
         await sts.delete()
         if settings.get("auto_delete", True):
-            del_minutes = max(1, settings.get("auto_delete_time", 1800) // 60)
+            del_secs = await _del_time(settings, message.from_user.id)
+            del_txt = _dur_txt(del_secs)
             tok = await _again_token(message.from_user.id, data)
             k = await client.send_message(
                 chat_id = message.from_user.id,
                 text=f"<b>🔔 Just a Quick Reminder !!\n\n"
-                f"⏳ This Content Will Be Automatically Deleted After <u>{del_minutes} Minutes</u> Due to Copyright Issues.\n\n"
+                f"⏳ This Content Will Be Automatically Deleted After <u>{del_txt}</u> Due to Copyright Issues.\n\n"
                             + (f"⚡ Fast Download & Watch Links Stay Valid For <u>{STREAM_LINK_HOURS} Hours</u>.\n\n" if STREAM_MODE else "") +
                 (_AGAIN_TXT if tok else _OPEN_TXT) +
                 f"📌 Want to Keep It? Save or Forward It to your Saved Messages Before It Expires. 👍\n\n"
@@ -700,7 +726,7 @@ async def _start_inner(client, message, sts):
                 f"👨‍💻 Powered By @ChillFlizX⚡️\n\n"
                 f"🧑‍🔧 Help & Support >>> @ChillFlizOwnerBot</b>"
             )
-            _spawn(_delete_batch_later(settings.get("auto_delete_time", 1800), filesarr, k, tok))
+            _spawn(_delete_batch_later(del_secs, filesarr, k, tok))
         return
 
 
@@ -874,12 +900,13 @@ async def _start_inner(client, message, sts):
         except:
             pass
         if settings.get("auto_delete", True):
-            del_minutes = max(1, settings.get("auto_delete_time", 1800) // 60)
+            del_secs = await _del_time(settings, message.from_user.id)
+            del_txt = _dur_txt(del_secs)
             tok = await _again_token(message.from_user.id, data)
             k = await client.send_message(
                 chat_id = message.from_user.id,
                 text=f"<b>🔔 Just a Quick Reminder !!\n\n"
-                f"⏳ This Content Will Be Automatically Deleted After <u>{del_minutes} Minutes</u> Due to Copyright Issues.\n\n"
+                f"⏳ This Content Will Be Automatically Deleted After <u>{del_txt}</u> Due to Copyright Issues.\n\n"
                             + (f"⚡ Fast Download & Watch Links Stay Valid For <u>{STREAM_LINK_HOURS} Hours</u>.\n\n" if STREAM_MODE else "") +
                 (_AGAIN_TXT if tok else _OPEN_TXT) +
                 f"📌 Want to Keep It? Save or Forward It to your Saved Messages Before It Expires. 👍\n\n"
@@ -887,7 +914,7 @@ async def _start_inner(client, message, sts):
                 f"👨‍💻 Powered By @ChillFlizX⚡️\n\n"
                 f"🧑‍🔧 Help & Support >>> @ChillFlizOwnerBot</b>"
             )
-            _spawn(_delete_single_later(settings.get("auto_delete_time", 1800), del_msg, k, tok))
+            _spawn(_delete_single_later(del_secs, del_msg, k, tok))
         return
     except Exception as e:
         logger.error(f"Failed to deliver file for decode_file_id={decode_file_id}: {e}")
